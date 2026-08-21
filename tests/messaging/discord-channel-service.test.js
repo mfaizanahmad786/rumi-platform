@@ -262,6 +262,17 @@ describe('discord-channel.service — interactive components (real discord.js co
   });
 });
 
+describe('discord-channel.service — sendFeatureMenuCarousel', () => {
+  it('has no native carousel, so it degrades straight to the real feature list (not a stub) — menu.service.js expects a working menu back', async () => {
+    const { service, user } = loadService();
+    const result = await service.sendFeatureMenuCarousel(TO);
+    expect(result).toBe(true);
+    const call = user.send.mock.calls[0][0];
+    const menuJson = call.components[0].components[0].toJSON();
+    expect(menuJson.options.map((o) => o.value)).toContain('menu_quiz');
+  });
+});
+
 describe('discord-channel.service — stubbed Flow', () => {
   it('sendFlow logs and resolves false — the modal-workaround renderer is a separate concern, not this call', async () => {
     const { service } = loadService();

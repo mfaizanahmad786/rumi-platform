@@ -104,10 +104,14 @@ class MenuService {
           break;
 
         case 'menu_reading':
-          // /009 FIX: Use WhatsApp Flow (same as /reading test command)
-          // Old ReadingAssessmentService.initiateAssessment() didn't ask for student name
-          // WhatsApp Flow collects all info in proper multi-screen form
+          // Same per-channel branch text-message.handler.js's /readingtest
+          // uses: Discord has its own modal-workaround reading_assessment
+          // flow (a "Start Assessment" button triggers it via
+          // discord_start_flow:reading_assessment); no Slack renderer
+          // exists yet, so Slack (like WhatsApp) goes through the
+          // Flow-shaped call below.
           const FeatureIntroService = require('./feature-intro.service');
+          const { driverForIdentifier } = require('./messaging/channel-registry');
 
           // Send intro video if first use
           await FeatureIntroService.sendFirstUseIntroIfNeeded(
@@ -117,7 +121,17 @@ class MenuService {
             language
           );
 
-          // Send WhatsApp Flow for reading assessment setup
+          if (driverForIdentifier(from) === 'discord') {
+            await WhatsAppService.sendInteractiveButtons(from, {
+              body: 'Let\'s set up a reading assessment for your student. This will help measure their reading fluency and comprehension.',
+              buttons: [{ id: 'discord_start_flow:reading_assessment', title: 'Start Assessment' }],
+            });
+            await FeatureIntroService.markFeatureUsed(user.id, 'reading');
+            break;
+          }
+
+          // Send WhatsApp Flow for reading assessment setup (also Slack's
+          // current degrade path)
           const flowSent = await WhatsAppService.sendFlow(from, {
             flowId: process.env.READING_ASSESSMENT_FLOW_ID,
             header: '📚 Reading Assessment',
@@ -131,8 +145,20 @@ class MenuService {
             logToFile('✅ Reading assessment flow sent from menu', { userId: user.id });
             await FeatureIntroService.markFeatureUsed(user.id, 'reading');
           } else {
-            throw new Error('Failed to send WhatsApp Flow from menu');
+            // Not an exception: this channel simply cannot offer the
+            // assessment yet — matches text-message.handler.js's own
+            // /readingtest degrade. Throwing here produced "Something went
+            // wrong", which reads as a bug rather than as a feature that
+            // isn't configured (confirmed live, on Slack).
+            logToFile('⚠️ Reading assessment unavailable on this channel (menu)', { userId: user.id });
+            await WhatsAppService.sendMessage(from, (language === 'ur'
+              ? 'ریڈنگ اسسمنٹ ابھی سیٹ اپ نہیں ہے۔ /menu ٹائپ کریں یہ دیکھنے کے لیے کہ میں اور کیا کر سکتا ہوں۔'
+              : 'The reading assessment is not set up on this deployment yet. Type /menu to see what else I can do.'));
           }
+          break;
+
+        case 'menu_quiz':
+          await this._handleQuizChoice(user, state.sessionId, from, language);
           break;
 
         case 'menu_video':
@@ -355,6 +381,19 @@ class MenuService {
     );
 
     logToFile('✅ Video generation initiated from menu', { userId, sessionId, language });
+  }
+
+  /**
+   * Handle Quiz choice — delegates to QuizOrchestrator, the exact same
+   * entry point the /quiz command uses, so behavior (class picking, parent
+   * phone number gating, etc.) is identical regardless of how the flow was
+   * triggered.
+   * @private
+   */
+  static async _handleQuizChoice(user, sessionId, from, language) {
+    const QuizOrchestrator = require('./quiz/quiz-orchestrator.service');
+    await QuizOrchestrator.initiateQuizRequest(user, from, sessionId, language, null);
+    logToFile('✅ Quiz initiated from menu', { userId: user.id, sessionId, language });
   }
 
   /**

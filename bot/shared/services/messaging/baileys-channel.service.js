@@ -693,6 +693,7 @@ const FEATURE_MENU_OPTIONS = [
   { id: 'menu_lesson_plan', title: 'Lesson Plans', description: 'Create detailed PDF lesson plans' },
   { id: 'menu_coaching', title: 'Classroom Coaching', description: 'Get teaching feedback from recordings' },
   { id: 'menu_reading', title: 'Reading Assessment', description: 'Test student reading fluency' },
+  { id: 'menu_quiz', title: 'Quiz', description: 'Create a quiz for your class' },
   { id: 'menu_video', title: 'AI Video Generation', description: 'Create educational videos' },
   { id: 'menu_other', title: 'Ask Anything', description: 'General teaching questions' },
 ];
@@ -706,6 +707,19 @@ async function sendFeatureMenuListFallback(to) {
     logToFile('❌ Baileys: error sending feature menu list fallback', { error: error.message });
     return false;
   }
+}
+
+/**
+ * Baileys (a linked WhatsApp device) has no native carousel-with-video-
+ * previews component — this always degrades to the interactive list,
+ * honoring the exact contract meta-channel.service.js's own
+ * sendFeatureMenuCarousel documents (attempt carousel, fall back to list on
+ * failure): here, "attempt" always fails by definition, so it goes straight
+ * to the list. A real implementation, not a stub — menu.service.js#sendMenu()
+ * calls this expecting a working menu to come out the other end.
+ */
+async function sendFeatureMenuCarousel(to) {
+  return sendFeatureMenuListFallback(to);
 }
 
 function notSupportedMessage(methodName) {
@@ -745,6 +759,7 @@ const IMPLEMENTATIONS = {
   sendLanguageSelectionList,
   sendStyleListFallback,
   sendFeatureMenuListFallback,
+  sendFeatureMenuCarousel,
   sendFlow,
 };
 
@@ -752,7 +767,6 @@ const IMPLEMENTATIONS = {
 const STUBS = {
   sendTemplate: true,
   sendStyleCarousel: true,
-  sendFeatureMenuCarousel: true,
   buildStyleCarouselPayload: false,
   buildFeatureMenuCarouselPayload: false,
 };

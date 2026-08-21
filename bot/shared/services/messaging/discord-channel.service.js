@@ -578,6 +578,7 @@ const FEATURE_MENU_OPTIONS = [
   { id: 'menu_lesson_plan', title: 'Lesson Plans' },
   { id: 'menu_coaching', title: 'Classroom Coaching' },
   { id: 'menu_reading', title: 'Reading Assessment' },
+  { id: 'menu_quiz', title: 'Quiz' },
   { id: 'menu_video', title: 'AI Video Generation' },
   { id: 'menu_other', title: 'Ask Anything' },
 ];
@@ -587,6 +588,19 @@ async function sendFeatureMenuListFallback(to) {
     header: "Here's what I can do!",
     action: { button: 'View Features', sections: [{ title: 'My Features', rows: FEATURE_MENU_OPTIONS }] },
   });
+}
+
+/**
+ * Discord has no native carousel-with-video-previews component — this
+ * always degrades to the interactive list, honoring the exact contract
+ * meta-channel.service.js's own sendFeatureMenuCarousel documents (attempt
+ * carousel, fall back to list on failure): here, "attempt" always fails by
+ * definition, so it goes straight to the list. A real implementation, not a
+ * stub — menu.service.js#sendMenu() calls this expecting a working menu to
+ * come out the other end on every channel.
+ */
+async function sendFeatureMenuCarousel(to) {
+  return sendFeatureMenuListFallback(to);
 }
 
 function notSupportedMessage(methodName) {
@@ -637,6 +651,7 @@ const IMPLEMENTATIONS = {
   sendLanguageSelectionList,
   sendStyleListFallback,
   sendFeatureMenuListFallback,
+  sendFeatureMenuCarousel,
   sendFlow,
 };
 
@@ -644,7 +659,6 @@ const IMPLEMENTATIONS = {
 const STUBS = {
   sendTemplate: true,
   sendStyleCarousel: true,
-  sendFeatureMenuCarousel: true,
   buildStyleCarouselPayload: false,
   buildFeatureMenuCarouselPayload: false,
 };

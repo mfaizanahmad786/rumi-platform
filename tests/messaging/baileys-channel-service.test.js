@@ -338,8 +338,16 @@ describe('baileys-channel.service — interactive/list methods render as numbere
       await service.sendFeatureMenuListFallback('923001234567');
       const [, menu] = pending.remember.mock.calls[0];
       expect(menu.options.map((o) => o.id)).toEqual([
-        'menu_lesson_plan', 'menu_coaching', 'menu_reading', 'menu_video', 'menu_other',
+        'menu_lesson_plan', 'menu_coaching', 'menu_reading', 'menu_quiz', 'menu_video', 'menu_other',
       ]);
+    });
+
+    it('sendFeatureMenuCarousel has no native carousel, so it degrades straight to the real feature list (not a stub) — menu.service.js expects a working menu back', async () => {
+      const { service, pending } = loadWithStore();
+      const result = await service.sendFeatureMenuCarousel('923001234567');
+      expect(result).toBe(true);
+      const [, menu] = pending.remember.mock.calls[0];
+      expect(menu.options.map((o) => o.id)).toContain('menu_quiz');
     });
 
     it('sendInteractiveMessage records list rows across all sections, flattened in order', async () => {

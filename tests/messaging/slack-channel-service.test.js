@@ -201,6 +201,18 @@ describe('slack-channel.service — interactive components (real Block Kit, not 
   });
 });
 
+describe('slack-channel.service — sendFeatureMenuCarousel', () => {
+  it('has no native carousel, so it degrades straight to the real feature list (not a stub) — menu.service.js expects a working menu back', async () => {
+    const { service, client } = loadService();
+    const result = await service.sendFeatureMenuCarousel(TO);
+    expect(result).toBe(true);
+    const call = client.chat.postMessage.mock.calls[0][0];
+    const actionsBlock = call.blocks.find((b) => b.type === 'actions');
+    const select = actionsBlock.elements[0];
+    expect(select.options.map((o) => o.value)).toContain('menu_quiz');
+  });
+});
+
 describe('slack-channel.service — stubbed Flow', () => {
   it('sendFlow logs and resolves false — the modal renderer is a separate concern, not this call', async () => {
     const { service } = loadService();
