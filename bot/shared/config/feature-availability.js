@@ -29,6 +29,30 @@ const REQUIRED_VARS = [
   'REDIS_URL',
 ];
 
+/**
+ * Which LLM key THIS deployment actually needs.
+ *
+ * REQUIRED_VARS names OPENROUTER_API_KEY because OpenRouter is the default
+ * and the overwhelmingly common case, but it is not the only way to run
+ * Rumi: llm-client.js has always supported LLM_PROVIDER=openai, and now
+ * supports any OpenAI-compatible endpoint via LLM_BASE_URL (Gemini, Groq,
+ * DeepSeek, a local Ollama).
+ *
+ * Until this existed, those paths were unreachable: the boot check demanded
+ * an OpenRouter key whatever provider you had configured, so a deployment
+ * with a perfectly good Gemini key was refused at startup for want of a
+ * credential it would never have used. The escape hatch existed and was
+ * nailed shut.
+ *
+ * Mirrors resolveChannelDriver's shape: the config file stays the single
+ * place that decides what this deployment requires.
+ */
+function resolveLlmKeyVar(env = process.env) {
+  if (isSet(env.LLM_BASE_URL)) return 'LLM_API_KEY';
+  if ((env.LLM_PROVIDER || '').trim().toLowerCase() === 'openai') return 'OPENAI_API_KEY';
+  return 'OPENROUTER_API_KEY';
+}
+
 // Additional vars required per messaging channel driver. Adding a new channel
 // (e.g. Slack) is a one-line addition here — no restructuring.
 const CHANNEL_REQUIRED_VARS = {
@@ -129,7 +153,11 @@ function resolveChannelDriver(env = process.env) {
 /** The full required-vars list for this env: the channel-independent core plus whichever channel is resolved. */
 function requiredVarsFor(env = process.env) {
   const channel = resolveChannelDriver(env);
-  return [...REQUIRED_VARS, ...(CHANNEL_REQUIRED_VARS[channel] || [])];
+  const llmKey = resolveLlmKeyVar(env);
+  // Swap the LLM key in place rather than appending, so the list stays the
+  // same length and the same shape whichever provider is configured.
+  const core = REQUIRED_VARS.map((v) => (v === 'OPENROUTER_API_KEY' ? llmKey : v));
+  return [...core, ...(CHANNEL_REQUIRED_VARS[channel] || [])];
 }
 
 /** Required vars (core + resolved channel) that are NOT set (empty array = ready to boot). */
@@ -180,6 +208,7 @@ module.exports = {
   FEATURES,
   isSet,
   resolveChannelDriver,
+  resolveLlmKeyVar,
   resolveActiveChannels,
   requiredVarsFor,
   missingRequired,

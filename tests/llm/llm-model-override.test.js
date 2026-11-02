@@ -136,3 +136,105 @@ describe('LLM_MODEL_OVERRIDE selects the model every call actually uses', () => 
     restore();
   });
 });
+
+/**
+ * Any OpenAI-compatible endpoint, named by LLM_BASE_URL.
+ *
+ * Gemini is why this exists: its free tier is far more generous than
+ * OpenRouter's, which matters for a project whose premise is that a school
+ * runs it on its own keys. The same two settings cover Groq, DeepSeek, a
+ * local Ollama or LM Studio.
+ *
+ * Before this, those paths were unreachable twice over — llm-client had no
+ * way to take a base URL, and feature-availability demanded an OpenRouter key
+ * at boot whatever provider was configured.
+ */
+describe('LLM_BASE_URL points Rumi at any OpenAI-compatible endpoint', () => {
+  const GEMINI = 'https://generativelanguage.googleapis.com/v1beta/openai';
+  const originalEnv = { ...process.env };
+  afterEach(() => { process.env = { ...originalEnv }; jest.resetModules(); });
+
+  it('uses the given base URL and key', () => {
+    const { mod, restore } = loadClient({
+      LLM_BASE_URL: GEMINI,
+      LLM_API_KEY: 'gemini-key',
+    });
+
+    const client = mod.getClient();
+    expect(client._opts.baseURL).toBe(GEMINI);
+    expect(client._opts.apiKey).toBe('gemini-key');
+    restore();
+  });
+
+  it('does NOT prefix the model with openai/ on a custom endpoint', async () => {
+    const { mod, restore } = loadClient({
+      LLM_BASE_URL: GEMINI,
+      LLM_API_KEY: 'k',
+      LLM_MODEL_OVERRIDE: 'gemini-2.0-flash',
+    });
+
+    await mod.getClient().chat.completions.create({ model: 'gpt-4o-mini', messages: [] });
+
+    // The prefix rule used to key off `PROVIDER !== 'openai'`, which would
+    // have asked Gemini for 'openai/gemini-2.0-flash' — a 404 nobody would
+    // connect back to that line.
+    expect(CAPTURED[0].model).toBe('gemini-2.0-flash');
+    restore();
+  });
+
+  it('a bare call-site model is left bare too, not mangled', async () => {
+    const { mod, restore } = loadClient({ LLM_BASE_URL: GEMINI, LLM_API_KEY: 'k' });
+
+    await mod.getClient().chat.completions.create({ model: 'gemini-2.0-flash', messages: [] });
+
+    expect(CAPTURED[0].model).toBe('gemini-2.0-flash');
+    restore();
+  });
+
+  it('a base URL wins over LLM_PROVIDER, which is the less specific statement', () => {
+    const { mod, restore } = loadClient({
+      LLM_PROVIDER: 'openrouter',
+      OPENROUTER_API_KEY: 'ork',
+      LLM_BASE_URL: GEMINI,
+      LLM_API_KEY: 'k',
+    });
+
+    expect(mod.getClient()._opts.baseURL).toBe(GEMINI);
+    expect(mod.getProviderInfo().provider).toBe('compatible');
+    restore();
+  });
+
+  it('a trailing slash on the base URL is tolerated', () => {
+    const { mod, restore } = loadClient({ LLM_BASE_URL: `${GEMINI}/`, LLM_API_KEY: 'k' });
+    expect(mod.getClient()._opts.baseURL).toBe(GEMINI);
+    restore();
+  });
+});
+
+describe('the boot check asks for the key the deployment will actually use', () => {
+  const fa = require('../../bot/shared/config/feature-availability');
+
+  it('demands an OpenRouter key by default', () => {
+    expect(fa.requiredVarsFor({})).toContain('OPENROUTER_API_KEY');
+  });
+
+  it('demands an OpenAI key when LLM_PROVIDER=openai', () => {
+    const vars = fa.requiredVarsFor({ LLM_PROVIDER: 'openai' });
+    expect(vars).toContain('OPENAI_API_KEY');
+    expect(vars).not.toContain('OPENROUTER_API_KEY');
+  });
+
+  it('demands LLM_API_KEY when a custom endpoint is named', () => {
+    const vars = fa.requiredVarsFor({ LLM_BASE_URL: 'https://generativelanguage.googleapis.com/v1beta/openai' });
+    expect(vars).toContain('LLM_API_KEY');
+    // The bug this fixes: a Gemini deployment was refused at boot for want of
+    // an OpenRouter key it would never have used.
+    expect(vars).not.toContain('OPENROUTER_API_KEY');
+  });
+
+  it('keeps the required list the same length whichever provider is configured', () => {
+    const base = fa.requiredVarsFor({}).length;
+    expect(fa.requiredVarsFor({ LLM_PROVIDER: 'openai' })).toHaveLength(base);
+    expect(fa.requiredVarsFor({ LLM_BASE_URL: 'http://localhost:11434/v1' })).toHaveLength(base);
+  });
+});

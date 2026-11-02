@@ -25,6 +25,28 @@ const DEFAULT_MODEL = process.env.LLM_MODEL || 'openai/gpt-4o';
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 
 /**
+ * Any OpenAI-compatible endpoint, named directly.
+ *
+ * Several providers now serve the OpenAI chat-completions shape, so pointing
+ * this client at one is a base URL and a key rather than a new integration.
+ * Google Gemini is the reason this exists — its free tier is far more
+ * generous than OpenRouter's, which matters for a project whose whole premise
+ * is that a school can run it on its own keys:
+ *
+ *   LLM_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
+ *   LLM_API_KEY=<an AI Studio key>
+ *   LLM_MODEL_OVERRIDE=gemini-2.0-flash
+ *
+ * The same two lines cover Groq, DeepSeek, Together, or a local Ollama or
+ * LM Studio. When LLM_BASE_URL is set it wins over LLM_PROVIDER, because
+ * naming an address is a more specific statement than naming a vendor.
+ */
+const CUSTOM_BASE_URL = (process.env.LLM_BASE_URL || '').trim().replace(/\/+$/, '');
+
+/** True only for real OpenRouter — a custom base URL is not OpenRouter even if LLM_PROVIDER still says so. */
+const IS_OPENROUTER = !CUSTOM_BASE_URL && PROVIDER !== 'openai';
+
+/**
  * When LLM_MODEL_OVERRIDE is set, every chat completion through this client
  * uses it, whatever model the call site asked for. Unset (the default), every
  * call site keeps the model it names and nothing changes.
@@ -66,11 +88,27 @@ let _client = null;
  * For OpenRouter, wraps chat.completions.create to auto-prefix model names.
  */
 function createLLMClient() {
-  const client = PROVIDER === 'openai'
+  let client;
+
+  if (CUSTOM_BASE_URL) {
+    // Any OpenAI-compatible endpoint. LLM_API_KEY is the generic name; the
+    // provider-specific ones are accepted too so a half-migrated .env still
+    // works rather than failing with an unhelpful 401. A local server that
+    // wants no auth still needs a non-empty string for the SDK.
+    client = new OpenAI({
+      apiKey: process.env.LLM_API_KEY
+        || process.env.GEMINI_API_KEY
+        || process.env.OPENAI_API_KEY
+        || process.env.OPENROUTER_API_KEY
+        || 'not-required',
+      baseURL: CUSTOM_BASE_URL,
+    });
+  } else if (PROVIDER === 'openai') {
     // Direct OpenAI — no baseURL override
-    ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+    client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  } else {
     // Default: OpenRouter — uses OpenAI-compatible API
-    : new OpenAI({
+    client = new OpenAI({
       apiKey: process.env.OPENROUTER_API_KEY,
       baseURL: OPENROUTER_BASE_URL,
       defaultHeaders: {
@@ -78,6 +116,7 @@ function createLLMClient() {
         'X-Title': 'Rumi Teaching Assistant',
       },
     });
+  }
 
   // One wrapper for both providers. It used to exist only on the OpenRouter
   // branch, so a direct-OpenAI deployment silently got no interception at all.
@@ -89,9 +128,14 @@ function createLLMClient() {
     if (MODEL_OVERRIDE) model = MODEL_OVERRIDE;
 
     // Auto-prefix bare names for OpenRouter ('gpt-4o-mini' → 'openai/gpt-4o-mini').
-    // A fully-qualified name ('meta-llama/llama-3.3-70b-instruct:free') already
-    // carries a slash and is left alone.
-    if (PROVIDER !== 'openai' && model && !model.includes('/')) {
+    // A fully-qualified name ('google/gemma-4-31b-it:free') already carries a
+    // slash and is left alone.
+    //
+    // Only for real OpenRouter. The test used to be `PROVIDER !== 'openai'`,
+    // which would mangle every other compatible endpoint: Gemini's model is
+    // 'gemini-2.0-flash', and asking it for 'openai/gemini-2.0-flash' is a
+    // 404 nobody would connect back to this line.
+    if (IS_OPENROUTER && model && !model.includes('/')) {
       model = `openai/${model}`;
     }
 
@@ -122,11 +166,16 @@ function getDefaultModel() {
  * Get current provider info (for diagnostics/health checks).
  */
 function getProviderInfo() {
+  let baseURL;
+  if (CUSTOM_BASE_URL) baseURL = CUSTOM_BASE_URL;
+  else if (IS_OPENROUTER) baseURL = OPENROUTER_BASE_URL;
+  else baseURL = 'https://api.openai.com/v1';
+
   return {
-    provider: PROVIDER,
+    provider: CUSTOM_BASE_URL ? 'compatible' : PROVIDER,
     model: DEFAULT_MODEL,
     modelOverride: MODEL_OVERRIDE || null,
-    baseURL: PROVIDER === 'openrouter' ? OPENROUTER_BASE_URL : 'https://api.openai.com/v1',
+    baseURL,
   };
 }
 
