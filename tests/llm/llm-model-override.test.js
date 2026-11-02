@@ -238,3 +238,58 @@ describe('the boot check asks for the key the deployment will actually use', () 
     expect(fa.requiredVarsFor({ LLM_BASE_URL: 'http://localhost:11434/v1' })).toHaveLength(base);
   });
 });
+
+/**
+ * LLM_REASONING_EFFORT — making tightly-capped calls work on reasoning models.
+ *
+ * Several call sites cap output hard because they want one word: intent
+ * detection sends max_tokens 10. A reasoning model spends that budget
+ * thinking and returns finish_reason 'length' with no content, which reached
+ * openai.service.js as `Cannot read properties of undefined (reading 'trim')`
+ * — caught by a fallback that then guessed the wrong intent, so Rumi chatted
+ * about lesson plans instead of generating one.
+ *
+ * Verified against the live Gemini endpoint before being written:
+ *   max_tokens:10                        -> content=None, finish=length
+ *   max_tokens:10 + reasoning_effort:none -> content='lesson_plan', finish=stop
+ */
+describe('LLM_REASONING_EFFORT', () => {
+  const originalEnv = { ...process.env };
+  afterEach(() => { process.env = { ...originalEnv }; jest.resetModules(); });
+
+  it('is added to every call when set', async () => {
+    const { mod, restore } = loadClient({
+      LLM_BASE_URL: 'https://generativelanguage.googleapis.com/v1beta/openai',
+      LLM_API_KEY: 'k',
+      LLM_REASONING_EFFORT: 'none',
+    });
+
+    await mod.getClient().chat.completions.create({ model: 'gemini-3.6-flash', messages: [], max_tokens: 10 });
+
+    expect(CAPTURED[0].reasoning_effort).toBe('none');
+    expect(CAPTURED[0].max_tokens).toBe(10); // the cap itself is untouched
+    restore();
+  });
+
+  it('is absent when unset, leaving the request byte-for-byte alone', async () => {
+    const { mod, restore } = loadClient({ LLM_PROVIDER: 'openai', OPENAI_API_KEY: 'k' });
+
+    const params = { model: 'gpt-4o-mini', messages: [], max_tokens: 10 };
+    await mod.getClient().chat.completions.create(params);
+
+    expect(CAPTURED[0]).toEqual(params);
+    expect('reasoning_effort' in CAPTURED[0]).toBe(false);
+    restore();
+  });
+
+  it('never overrides a call site that set its own effort', async () => {
+    const { mod, restore } = loadClient({
+      LLM_BASE_URL: 'https://x.test/v1', LLM_API_KEY: 'k', LLM_REASONING_EFFORT: 'none',
+    });
+
+    await mod.getClient().chat.completions.create({ model: 'm', messages: [], reasoning_effort: 'high' });
+
+    expect(CAPTURED[0].reasoning_effort).toBe('high');
+    restore();
+  });
+});

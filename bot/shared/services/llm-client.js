@@ -47,6 +47,33 @@ const CUSTOM_BASE_URL = (process.env.LLM_BASE_URL || '').trim().replace(/\/+$/, 
 const IS_OPENROUTER = !CUSTOM_BASE_URL && PROVIDER !== 'openai';
 
 /**
+ * Sent as `reasoning_effort` on every chat completion when set. Unset (the
+ * default), nothing is added and the request is unchanged.
+ *
+ * Reasoning models spend output tokens thinking before they answer, and this
+ * codebase caps several calls very tightly because it was written against
+ * models that do not: intent detection asks for one word with max_tokens 10,
+ * and language detection and the menu router are similarly tight. On Gemini
+ * 3.x the whole budget goes on reasoning and the response comes back with
+ * `finish_reason: "length"` and NO content at all — which surfaced as
+ * `Cannot read properties of undefined (reading 'trim')` from
+ * openai.service.js, caught by a fallback that then guessed the wrong intent.
+ * The visible symptom was Rumi chatting pleasantly about lesson plans instead
+ * of generating one, with nothing in the log that named the cause.
+ *
+ *   LLM_REASONING_EFFORT=none
+ *
+ * is what makes those calls work on Gemini. It is opt-in rather than inferred
+ * because the parameter is not universally accepted — sending it to a model
+ * that does not expect it is a 400 — and because a deployment using a
+ * reasoning model deliberately, for quality, should keep its reasoning.
+ *
+ * The durable fix is for those call sites to stop assuming a model answers
+ * without thinking; this makes the models people actually have work today.
+ */
+const REASONING_EFFORT = (process.env.LLM_REASONING_EFFORT || '').trim();
+
+/**
  * When LLM_MODEL_OVERRIDE is set, every chat completion through this client
  * uses it, whatever model the call site asked for. Unset (the default), every
  * call site keeps the model it names and nothing changes.
@@ -139,7 +166,15 @@ function createLLMClient() {
       model = `openai/${model}`;
     }
 
-    return originalCreate(model === params.model ? params : { ...params, model }, options);
+    const changed = model !== params.model || REASONING_EFFORT;
+    if (!changed) return originalCreate(params, options);
+
+    const next = { ...params, model };
+    // Never clobber a call site that has asked for a specific effort itself.
+    if (REASONING_EFFORT && next.reasoning_effort === undefined) {
+      next.reasoning_effort = REASONING_EFFORT;
+    }
+    return originalCreate(next, options);
   };
 
   return client;
