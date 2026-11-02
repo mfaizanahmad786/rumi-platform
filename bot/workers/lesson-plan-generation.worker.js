@@ -61,7 +61,15 @@ class LessonPlanGenerationWorker {
    * @param {Object} jobData - Job payload from SQS
    */
   static async process(jobData) {
-    const { requestId, userId, phoneNumber, topic, fullMessage, language = 'en', contentType = 'lesson_plan' } = jobData;
+    const { requestId, userId, topic, fullMessage, language = 'en', contentType = 'lesson_plan' } = jobData;
+
+    // Where this plan gets delivered: the channel identifier captured when the
+    // teacher asked, never a users.phone_number re-derivation (that is
+    // WhatsApp-only and sends a Discord- or Switch-originated plan nowhere).
+    // `phoneNumber` is the pre-migration-018 name for the same value and is
+    // read as a fallback so jobs already in the queue when this deploys still
+    // reach their teacher. Every send below uses this one variable.
+    const phoneNumber = jobData.recipientIdentifier || jobData.phoneNumber;
 
     const messages = MESSAGES[language] || MESSAGES.en;
 

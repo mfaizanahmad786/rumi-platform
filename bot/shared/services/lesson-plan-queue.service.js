@@ -11,6 +11,23 @@
 const { logToFile } = require('../utils/logger');
 const supabase = require('../config/supabase');
 const SQSQueueService = require('./queue');
+const { driverForIdentifier } = require('./messaging/channel-registry');
+
+/**
+ * The bare WhatsApp phone number behind a channel identifier, or null when
+ * there isn't one.
+ *
+ * An additive-channel identifier ("slack:U0123", "discord:918273645",
+ * "switch:<room>|<participant>") names no phone number at all, and writing it
+ * into a column called phone_number is what broke Discord: the column is
+ * VARCHAR(20) and a Discord identifier is 25-27 characters, so the insert was
+ * rejected outright. Delivery reads recipient_identifier now; this column
+ * goes back to meaning what its name says.
+ */
+function barePhoneNumberOrNull(identifier) {
+  if (!identifier) return null;
+  return driverForIdentifier(identifier) ? null : String(identifier);
+}
 
 class LessonPlanQueueService {
   /**
@@ -33,7 +50,16 @@ class LessonPlanQueueService {
         .from('lesson_plan_requests')
         .insert({
           user_id: userId,
-          phone_number: phoneNumber,
+          // recipient_identifier is where the worker delivers — the full
+          // channel identifier, whatever messaging/index.js routes on. Same
+          // convention as coaching_sessions / exam_check_sessions /
+          // video_requests.
+          recipient_identifier: phoneNumber,
+          // phone_number keeps its original meaning: a bare WhatsApp number,
+          // or null for a teacher who has none. It used to be handed the
+          // prefixed identifier instead, which a Discord one overflowed —
+          // see migrations/018_lesson_plan_requests_recipient_identifier.sql.
+          phone_number: barePhoneNumberOrNull(phoneNumber),
           topic,
           full_message: fullMessage,
           language,
@@ -61,6 +87,11 @@ class LessonPlanQueueService {
         await SQSQueueService.queueCoachingJob(requestId, 'lesson_plan_generation', {
           requestId,
           userId,
+          // Both keys carry the same full channel identifier. `phoneNumber`
+          // stays for the jobs already in flight when this deploys — a worker
+          // that picks up an old message must still find a recipient. It can
+          // go once the queue has drained past the deploy.
+          recipientIdentifier: phoneNumber,
           phoneNumber,
           topic,
           fullMessage,
@@ -237,7 +268,10 @@ class LessonPlanQueueService {
       await SQSQueueService.queueCoachingJob(request.id, 'lesson_plan_generation', {
         requestId: request.id,
         userId: request.user_id,
-        phoneNumber: request.phone_number,
+        // Prefer the stored identifier; fall back to phone_number for rows
+        // created before migration 018, which have no recipient_identifier.
+        recipientIdentifier: request.recipient_identifier || request.phone_number,
+        phoneNumber: request.recipient_identifier || request.phone_number,
         topic: request.topic,
         fullMessage: request.full_message,
         language: request.language,

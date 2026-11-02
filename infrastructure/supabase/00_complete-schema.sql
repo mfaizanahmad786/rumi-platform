@@ -4011,6 +4011,30 @@ ALTER TABLE coaching_sessions ADD COLUMN IF NOT EXISTS recipient_identifier VARC
 ALTER TABLE exam_check_sessions ADD COLUMN IF NOT EXISTS recipient_identifier VARCHAR(255);
 ALTER TABLE video_requests ADD COLUMN IF NOT EXISTS recipient_identifier VARCHAR(255);
 
+-- lesson_plan_requests was missed when the three tables above were migrated,
+-- and it is the one that broke. It still carried the pre-multi-channel shape
+-- (phone_number VARCHAR(20) NOT NULL) while text-message.handler.js passed it
+-- the full prefixed identifier, so a lesson plan requested from Discord threw
+-- at the INSERT:
+--
+--   "discord:" (8) + a 17-19 digit snowflake  = 25-27 chars  -> rejected
+--   "slack:"   (6) + a 9-11 char Slack user id = 17 chars    -> fits, barely
+--   a bare WhatsApp phone number               = 12 chars    -> fits
+--
+-- Postgres rejects rather than truncating, so every Discord teacher asking
+-- for a lesson plan got "Sorry, there was an error creating the lesson plan.
+-- Please try again." — on every attempt, since the column could never hold
+-- the value. Slack fitting with three characters to spare is why it reached
+-- production. A 'switch:<room>|<participant>' identifier is ~114 chars and
+-- would have hit the same wall.
+ALTER TABLE lesson_plan_requests ADD COLUMN IF NOT EXISTS recipient_identifier VARCHAR(255);
+
+-- phone_number: relaxed for the same reason users.phone_number was. A teacher
+-- who reaches Rumi on Discord or Switch has no phone number to record, and
+-- the column is no longer where delivery reads from. Rows created before this
+-- migration keep their value, and the worker falls back to it.
+ALTER TABLE lesson_plan_requests ALTER COLUMN phone_number DROP NOT NULL;
+
 -- =============================================================================
 -- Function reconcile (Phase 5) — RPCs the bot invokes via supabase.rpc() that the
 -- consolidated schema predated. CREATE OR REPLACE keeps it idempotent. (get_column_info
