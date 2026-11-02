@@ -82,11 +82,57 @@ function config(env = process.env) {
   };
 }
 
+/**
+ * Populates the credentials every HTTP call needs, from the environment, in
+ * any process — whether or not this one owns the event stream.
+ *
+ * This is what lets a WORKER send. Lesson-plan PDFs, coaching reports,
+ * reading results, videos and exam grading are all delivered from the
+ * background worker, minutes after the request, through the same
+ * WhatsAppService facade the bot uses. The worker has the same env but has
+ * never called connect() — and must never call it, because reopening this
+ * agent's connection id is a takeover that would evict the bot's stream with
+ * an `evicted` frame and stop every teacher's messages arriving.
+ *
+ * It does not have to. Unlike Matrix — where the equivalent problem forced
+ * upstream PR #104 to relay every worker send to the bot over Redis, because
+ * matrix-bot-sdk cannot send without a sync connection and a crypto store —
+ * Switch's send routes are ordinary stateless HTTP. `POST /agents/{id}/message`
+ * and the media routes authenticate with the API key alone and take the room
+ * as an argument; neither consults a connection. So the worker sends
+ * directly, with no Redis hop, no carrying PDFs between processes as base64,
+ * and no request/reply timeout to get wrong.
+ *
+ * The split that makes this safe is simply: connect() opens a stream and only
+ * the bot calls it (via switch-events.adapter.js#attach, wired in
+ * whatsapp-bot.js's PERSISTENT_CONNECTION_DRIVERS); every send path below
+ * goes through here and opens nothing.
+ */
+function ensureConfig(env = process.env) {
+  if (state.bridgeUrl && state.agentId && state.apiKey) return state;
+  const cfg = config(env);
+  if (!cfg.bridgeUrl || !cfg.agentId || !cfg.apiKey) {
+    throw new Error(
+      'Switch channel needs SWITCH_BRIDGE_URL, SWITCH_AGENT_ID and SWITCH_AGENT_API_KEY. '
+      + 'Run `node bot/scripts/setup/switch-register.js` to create the agent and print all three.'
+    );
+  }
+  state = { ...state, ...cfg };
+  return state;
+}
+
 function isConnected() {
   return state.connected;
 }
 
+/**
+ * The agent's id. Resolves from the environment when this process has never
+ * connected, so a worker can address the media routes.
+ */
 function getAgentId() {
+  if (!state.agentId) {
+    try { ensureConfig(); } catch { return null; }
+  }
   return state.agentId;
 }
 
@@ -103,6 +149,7 @@ function getRooms() {
  * a stream. Registration is out of band (scripts/setup/switch-register.js).
  */
 async function api(path, { method = 'GET', body, headers = {} } = {}) {
+  ensureConfig();
   const res = await fetch(`${state.bridgeUrl}${path}`, {
     method,
     headers: {
@@ -135,7 +182,8 @@ async function api(path, { method = 'GET', body, headers = {} } = {}) {
  * without it. Arguments go in the body UNWRAPPED — not nested under a key.
  */
 async function callOp(operation, args = {}) {
-  return api(`/agents/${state.agentId}/ops/${operation}`, {
+  const { agentId } = ensureConfig(); // before the template literal — see postMessage
+  return api(`/agents/${agentId}/ops/${operation}`, {
     method: 'POST',
     body: args,
     headers: connectionId ? { 'X-Switch-Connection-Id': connectionId } : {},
@@ -148,7 +196,14 @@ async function callOp(operation, args = {}) {
  * driver uses, so a send never depends on the stream being up at that instant.
  */
 async function postMessage(roomId, content) {
-  return api(`/agents/${state.agentId}/message`, {
+  // ensureConfig() BEFORE building the path, not just inside api(): the
+  // template literal is evaluated first, so reading state.agentId here would
+  // bake in a null from a process that has never connected. Switch happens to
+  // resolve the agent from the API key and ignore the path segment, so
+  // "/agents/null/message" still delivers today — which is exactly what makes
+  // this the kind of bug that surfaces much later, on a server that doesn't.
+  const { agentId } = ensureConfig();
+  return api(`/agents/${agentId}/message`, {
     method: 'POST',
     body: { room_id: roomId, content },
   });
@@ -163,6 +218,7 @@ async function postMessage(roomId, content) {
  * through the relay without ever opening a stream of its own.
  */
 async function uploadMedia(roomId, buffer, filename, mimeType, caption) {
+  ensureConfig();
   const form = new FormData();
   form.append('file', new Blob([buffer], { type: mimeType || 'application/octet-stream' }), filename || 'attachment');
   if (caption) form.append('caption', caption);
@@ -189,6 +245,7 @@ async function uploadMedia(roomId, buffer, filename, mimeType, caption) {
  * the content behind it.
  */
 async function downloadMedia(roomId, mxc) {
+  ensureConfig();
   const res = await fetch(
     `${state.bridgeUrl}/agents/${state.agentId}/rooms/${roomId}/media?mxc=${encodeURIComponent(mxc)}`,
     { headers: { Authorization: `Bearer ${state.apiKey}` } }
@@ -414,13 +471,7 @@ async function consume(body, signal) {
 async function connect(env = process.env) {
   if (connectPromise) return connectPromise;
 
-  const cfg = config(env);
-  if (!cfg.bridgeUrl || !cfg.agentId || !cfg.apiKey) {
-    throw new Error(
-      'Switch channel needs SWITCH_BRIDGE_URL, SWITCH_AGENT_ID and SWITCH_AGENT_API_KEY. '
-      + 'Run `node bot/scripts/setup/switch-register.js` to create the agent and print all three.'
-    );
-  }
+  const cfg = ensureConfig(env);
 
   shuttingDown = false;
   if (!connectionId) connectionId = randomUUID();
@@ -468,6 +519,7 @@ module.exports = {
   downloadMedia,
   api,
   config,
+  ensureConfig,
   _resetForTests,
   // Exposed for the relay and for tests that need to assert takeover safety.
   _connectionId: () => connectionId,
