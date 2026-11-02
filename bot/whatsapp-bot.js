@@ -1884,14 +1884,27 @@ const PERSISTENT_CONNECTION_DRIVERS = {
  * never thrown — a connection problem must not crash server boot.
  */
 async function wireBaileysInboundIfSelected() {
-  for (const driver of Object.values(PERSISTENT_CONNECTION_DRIVERS)) {
-    if (!driver.isActive(process.env)) continue;
+  const active = Object.entries(PERSISTENT_CONNECTION_DRIVERS)
+    .filter(([, driver]) => driver.isActive(process.env));
+
+  // Attached CONCURRENTLY, not one after another. Baileys' attach resolves
+  // only once the WhatsApp socket reaches `open`, which on an unpaired
+  // deployment means "when a human has scanned the QR code" — there is no
+  // timeout on that. Awaiting the drivers in sequence therefore held every
+  // later channel hostage to that scan: a Slack, Discord or Switch teacher
+  // got no listener at all until somebody picked up a phone, on a deployment
+  // that may not intend to use WhatsApp at that moment. Each driver already
+  // reports its own failure, and allSettled means one that never resolves
+  // cannot stop the others from coming up.
+  await Promise.allSettled(active.map(async ([name, driver]) => {
     try {
       await driver.attachInbound(handleWebhookPost);
     } catch (error) {
-      logToFile('❌ Failed to attach persistent-connection inbound listener', { error: error.message, stack: error.stack });
+      logToFile('❌ Failed to attach persistent-connection inbound listener', {
+        driver: name, error: error.message, stack: error.stack,
+      });
     }
-  }
+  }));
 }
 
 /**
