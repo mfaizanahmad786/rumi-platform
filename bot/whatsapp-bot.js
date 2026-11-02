@@ -39,8 +39,8 @@ const flowEndpointRoutes = require('./shared/routes/flow-endpoint.routes');
 // user_channels/getOrCreateUserByChannel expects (registry driver names are
 // per-implementation — meta/baileys both mean 'whatsapp' as an identity
 // family; slack/discord map 1:1). See driverForIdentity() below.
-const { driverForIdentifier } = require('./shared/services/messaging/channel-registry');
-const CHANNEL_FAMILY = { slack: 'slack', discord: 'discord' };
+const { driverForIdentifier, parseSwitchIdentifier } = require('./shared/services/messaging/channel-registry');
+const CHANNEL_FAMILY = { slack: 'slack', discord: 'discord', switch: 'switch' };
 
 /**
  * Resolves the (channel, channelUserId) pair for a `from` identifier, or null
@@ -52,6 +52,19 @@ const CHANNEL_FAMILY = { slack: 'slack', discord: 'discord' };
 function resolveChannelIdentity(from) {
   const driverName = driverForIdentifier(from);
   if (!driverName) return null;
+
+  // Switch is the one channel whose identifier names TWO things — the room a
+  // reply goes to and the person it is about ("switch:<room>|<participant>").
+  // Only the person is the identity: a teacher is the same teacher in the
+  // staffroom and in a grade-3 room, and must keep one history, one language
+  // and one set of past assessments across both. The room half stays in the
+  // routing identifier, where sends need it, and never reaches user_channels.
+  if (driverName === 'switch') {
+    const parsed = parseSwitchIdentifier(from);
+    if (!parsed) return null;
+    return { channel: CHANNEL_FAMILY.switch, channelUserId: parsed.participantId };
+  }
+
   const prefix = `${driverName}:`; // CHANNEL_PREFIXES value happens to equal the driver name today
   return { channel: CHANNEL_FAMILY[driverName] || driverName, channelUserId: String(from).slice(prefix.length) };
 }
@@ -1846,6 +1859,19 @@ const PERSISTENT_CONNECTION_DRIVERS = {
     // take WhatsApp down), so this intentionally stays null.
     onLogoutExit: null,
     close: () => require('./shared/services/messaging/discord-connection').close(),
+  },
+  switch: {
+    isActive: (env) => require('./shared/config/feature-availability').resolveActiveChannels(env).includes('switch'),
+    attachInbound: async (dispatch) => {
+      const switchEventsAdapter = require('./shared/services/messaging/inbound/switch-events.adapter');
+      await switchEventsAdapter.attach(dispatch);
+    },
+    // There is no "you have been logged out" event for an agent API key. The
+    // closest thing is an `evicted` frame, which means another process took
+    // this agent's connection id — a configuration problem to shout about,
+    // never a reason to take WhatsApp down with us. The adapter logs it.
+    onLogoutExit: null,
+    close: () => require('./shared/services/messaging/switch-connection').close(),
   },
 };
 

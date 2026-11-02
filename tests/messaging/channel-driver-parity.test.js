@@ -40,6 +40,7 @@ const { DRIVERS } = require('../../bot/shared/services/messaging/channel-registr
 require('../../bot/shared/services/messaging/meta-channel.service');
 require('../../bot/shared/services/messaging/baileys-channel.service');
 require('../../bot/shared/services/messaging/slack-channel.service');
+require('../../bot/shared/services/messaging/switch-channel.service');
 
 function parseMethodNames(src) {
   const names = new Set();
@@ -72,6 +73,24 @@ const EXTRA_MOCKS_BY_DRIVER = {
         files: { uploadV2: jest.fn(), info: jest.fn() },
       })),
     }), { virtual: true });
+  },
+  switch: () => {
+    // Without this the driver's real methods reach a real fetch() — there is
+    // no SDK to mock, the agent protocol being plain HTTP — and the pending
+    // sockets keep Jest's worker alive past the end of the run.
+    jest.doMock('../../bot/shared/services/messaging/switch-connection', () => ({
+      events: { on: jest.fn(), emit: jest.fn(), removeAllListeners: jest.fn() },
+      connect: jest.fn().mockRejectedValue(new Error('not connected in this test')),
+      close: jest.fn(),
+      isConnected: jest.fn().mockReturnValue(false),
+      getAgentId: jest.fn().mockReturnValue('agent-never-used'),
+      getRooms: jest.fn().mockReturnValue([]),
+      callOp: jest.fn().mockRejectedValue(new Error('not connected in this test')),
+      postMessage: jest.fn().mockRejectedValue(new Error('not connected in this test')),
+      uploadMedia: jest.fn().mockRejectedValue(new Error('not connected in this test')),
+      downloadMedia: jest.fn().mockRejectedValue(new Error('not connected in this test')),
+      api: jest.fn().mockRejectedValue(new Error('not connected in this test')),
+    }));
   },
 };
 

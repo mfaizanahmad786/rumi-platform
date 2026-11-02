@@ -52,6 +52,12 @@ const ADDITIVE_CHANNEL_REQUIRED_VARS = {
   // connection too — see discord-events.adapter.js. There is no HTTP route
   // to sign-verify at all for this driver, unlike Slack's webhook-based design.
   discord: ['DISCORD_BOT_TOKEN', 'DISCORD_APPLICATION_ID'],
+  // Switch is one channel that reaches Slack, Teams, Discord, Telegram and
+  // Mattermost at once — Rumi joins rooms on a Switch server and that server
+  // owns the per-platform bridges, so there is no per-platform credential
+  // here. All three vars come out of `node bot/scripts/setup/switch-register.js`;
+  // the API key is issued exactly once, at registration.
+  switch: ['SWITCH_BRIDGE_URL', 'SWITCH_AGENT_ID', 'SWITCH_AGENT_API_KEY'],
 };
 
 // Optional features → the env key(s) that switch each one on.
