@@ -35,6 +35,7 @@ function config(env = process.env) {
   return {
     roomId: (env.SWITCH_ESCALATION_ROOM_ID || '').trim(),
     agentName: (env.SWITCH_ESCALATION_AGENT || 'rumi-dev-agent').trim(),
+    baseBranch: (env.SWITCH_ESCALATION_BASE_BRANCH || '').trim(),
   };
 }
 
@@ -121,7 +122,7 @@ async function confirm(messageBody, opts) {
  * event rather than something the agent merely sees.
  */
 async function send({ messageBody, teacherIdentifier, kind = 'defect', env = process.env, connection } = {}) {
-  const { roomId, agentName } = config(env);
+  const { roomId, agentName, baseBranch } = config(env);
   if (!roomId) return false;
 
   // eslint-disable-next-line global-require -- lazy, matching this directory's convention
@@ -152,6 +153,23 @@ async function send({ messageBody, teacherIdentifier, kind = 'defect', env = pro
        'that fails without it. Open a pull request rather than pushing to the branch.']
     : ['Please reproduce it from what they wrote before changing anything, and',
        'write a test that fails on the bug first.'];
+
+  // Which branch the pull request is against.
+  //
+  // `gh pr create` defaults its base to the repository's default branch, which
+  // is only the right answer when the deployment runs from it. Rumi is just as
+  // often running a release or feature branch that is dozens of commits ahead —
+  // and a PR opened against a stale default carries every one of those commits,
+  // so the one change under review is buried in a diff nobody can read.
+  //
+  // Named rather than detected: the agent and the bot need not share a checkout
+  // (a worktree, a container, another machine entirely), so the branch this
+  // process happens to have checked out is not evidence about the agent's. Left
+  // unset, this says nothing and the agent falls back to its own judgement —
+  // better than asserting a branch name that may not exist.
+  if (baseBranch) {
+    instruction.push(`Work from \`${baseBranch}\` — that is the branch this Rumi is running, and what any pull request should target.`);
+  }
 
   const body = [
     headline,

@@ -137,6 +137,34 @@ describe('escalation service', () => {
     expect(sent[1]).toMatch(/reproduce/i);
   });
 
+  it('names the branch to work from, so the pull request is not opened against a stale default', async () => {
+    const svc = load();
+    const sent = [];
+    const conn = { postMessage: jest.fn((_r, c) => { sent.push(c); return Promise.resolve({}); }) };
+    const env = { ...ENV, SWITCH_ESCALATION_BASE_BRANCH: 'feat/switch-channel' };
+
+    await svc.send({ messageBody: 'add a /help command', kind: 'request', teacherIdentifier: 't', env, connection: conn });
+    await svc.send({ messageBody: 'nothing came back', kind: 'defect', teacherIdentifier: 't', env, connection: conn });
+
+    // Both kinds need it: `gh pr create` bases a PR on the repository's default
+    // branch, which on a deployment running a feature branch means a diff
+    // carrying every commit that branch is ahead by.
+    for (const brief of sent) expect(brief).toContain('feat/switch-channel');
+  });
+
+  it('says nothing about a branch when none is configured', async () => {
+    const svc = load();
+    const sent = [];
+    const conn = { postMessage: jest.fn((_r, c) => { sent.push(c); return Promise.resolve({}); }) };
+
+    await svc.send({ messageBody: 'add a /help command', kind: 'request', teacherIdentifier: 't', env: ENV, connection: conn });
+
+    // Asserting a branch name that may not exist is worse than leaving the
+    // agent to its own judgement.
+    expect(sent[0]).not.toMatch(/work from|base it on/i);
+    expect(sent[0]).toMatch(/pull request/i);
+  });
+
   it('tells a teacher asking for something different from a teacher reporting a fault', () => {
     const svc = load();
     const request = svc.acknowledgement('en', 'request');
