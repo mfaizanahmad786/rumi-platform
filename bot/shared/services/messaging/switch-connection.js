@@ -16,9 +16,16 @@
  * terminated with an `evicted` frame. Two processes sharing one id fight,
  * each evicting the other on every reconnect. Rumi runs background workers
  * (lesson-plan generation, coaching reports) in separate processes, so those
- * must NEVER call connect() — they relay their sends to the bot process over
- * Redis instead (switch-outbound-relay.js), exactly as the Matrix channel in
- * upstream PR #104 had to for the same structural reason.
+ * must NEVER call connect().
+ *
+ * They do not need to. Switch's send routes are stateless HTTP — see
+ * ensureConfig() below — so a worker posts directly with the API key and
+ * opens no stream at all. That is why there is no outbound relay here: the
+ * Matrix channel in upstream PR #104 needed one (matrix-outbound-relay.js,
+ * ~270 lines over Redis) because matrix-bot-sdk cannot send without a sync
+ * connection and a crypto store. Nothing in this channel has that
+ * constraint, so the split is simply "connect() is the bot's; sends are
+ * anyone's", enforced by tests/messaging/switch-worker-send.test.js.
  *
  * ── No new dependency ────────────────────────────────────────────────────────
  * Node 20+ ships fetch and web streams, which is the entire client surface

@@ -517,8 +517,8 @@ for (const { name, isAsync } of MEMBERS) {
 SwitchChannel._roomOf = roomOf;
 SwitchChannel._participantOf = participantOf;
 SwitchChannel._renderOptionsAsText = renderOptionsAsText;
-// The relay needs the real implementations by name to run a worker's send in
-// the bot process — see switch-outbound-relay.js.
+// The real implementations by name, for tests that need to assert on one
+// directly rather than through the parity-built surface.
 SwitchChannel._localImplementations = IMPLEMENTATIONS;
 
 module.exports = SwitchChannel;

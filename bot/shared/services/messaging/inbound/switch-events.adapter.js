@@ -25,7 +25,8 @@
  * place Switch identities enter the system, then carried unchanged through
  * getOrCreateUserByChannel and every downstream send. The room travels inside
  * the identifier because a reply may be sent minutes later by a worker
- * process that has nothing but that string (see switch-outbound-relay.js).
+ * process that has nothing but that string, and Switch's send routes take the
+ * room as an argument (see switch-connection.js#ensureConfig).
  * The participant half alone is what identifies the teacher, so a teacher
  * keeps one history across every room they speak in — see
  * whatsapp-bot.js#resolveChannelIdentity.

@@ -94,6 +94,8 @@ async function tryCurriculumLessonPlanServe(from, topic, user, language) {
 
 const { evaluateHomeworkTrigger } = require('./homework-trigger');
 const { detectEditClassIntent } = require('./edit-class-trigger');
+const { evaluateEscalationTrigger } = require('./escalation-trigger');
+const EscalationService = require('../services/escalation.service');
 
 async function handleTextMessage(message, from, messageBody, user = null) {
   logToFile(`Processing TEXT message: ${messageBody}`);
@@ -1421,6 +1423,45 @@ async function handleTextMessage(message, from, messageBody, user = null) {
       logToFile('❌ Error starting /status', { userId: user?.id, error: error.message });
     }
     return;
+  }
+
+  // ============================================================
+  // ESCALATION — a teacher reporting that RUMI ITSELF is broken.
+  //
+  // Runs before intent routing on purpose. Intent detection classifies a bug
+  // report as 'general', which hands it to the LLM, which apologises and
+  // moves on — observed live promising "I will always deliver your full
+  // lesson plan right away in the very same message", a change Rumi cannot
+  // make. The report then dies in the chat, unseen by anyone who could fix
+  // it. Catching it here routes it to people and agents who can act, and
+  // tells the teacher something true instead.
+  //
+  // Presence-gated on SWITCH_ESCALATION_ROOM_ID, so a deployment without a
+  // place to escalate to is completely unaffected. Best-effort throughout: a
+  // teacher must never see an error because an escalation failed.
+  // ============================================================
+  {
+    const esc = evaluateEscalationTrigger({
+      messageBody,
+      escalationConfigured: EscalationService.isConfigured(),
+    });
+    if (esc.match) {
+      try {
+        const isComplaint = await EscalationService.confirm(messageBody);
+        if (isComplaint) {
+          typingController.stop();
+          await EscalationService.send({ messageBody, teacherIdentifier: from });
+          await WhatsAppService.sendMessage(from, EscalationService.acknowledgement(responseLanguage));
+          logToFile('Escalated a teacher bug report', { signal: esc.signal });
+          return;
+        }
+        logToFile('Escalation signal did not survive classification', { signal: esc.signal });
+      } catch (error) {
+        // Fall through to normal handling — a broken escalation path must not
+        // swallow the teacher's message.
+        logToFile('⚠️ Escalation check failed, continuing normally', { error: error.message });
+      }
+    }
   }
 
   // ============================================================
