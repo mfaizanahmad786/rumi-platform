@@ -402,11 +402,22 @@ const defaultProbes = {
   },
 };
 
+/** The LLM key this deployment needs, named by feature-availability. */
+function requiredLlmKey(env = process.env) {
+  // eslint-disable-next-line global-require -- lazy: keeps doctor loadable without the bot's config graph
+  const { resolveLlmKeyVar } = require('../../shared/config/feature-availability');
+  return resolveLlmKeyVar(env);
+}
+
 // Which probe backs each REQUIRED service, and the env vars it needs to run.
 const REQUIRED_PROBES = [
   { name: 'Supabase', probe: 'supabase', needs: ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY'] },
   { name: 'Rumi tables', probe: 'tables', needs: ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY'] },
-  { name: 'OpenRouter (LLM)', probe: 'openrouter', needs: ['OPENROUTER_API_KEY'] },
+  // `llm` rather than `openrouter`, and the key it needs depends on the
+  // provider — resolveLlmKeyVar is the one place that decides which, so
+  // doctor reports on the provider this deployment ACTUALLY uses rather than
+  // failing a working Gemini or Groq deployment for want of an OpenRouter key.
+  { name: 'AI model', probe: 'llm', needs: [requiredLlmKey()] },
   { name: 'WhatsApp Cloud API', probe: 'whatsapp', needs: ['PHONE_NUMBER_ID', 'WHATSAPP_TOKEN'] },
   { name: 'Redis', probe: 'redis', needs: ['REDIS_URL'] },
 ];

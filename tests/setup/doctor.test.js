@@ -27,6 +27,10 @@ const allPassProbes = {
   supabase: async () => ({ ok: true, detail: 'HTTP 200' }),
   tables: async () => ({ ok: true, detail: 'the "users" table is already there' }),
   openrouter: async () => ({ ok: true, detail: 'HTTP 200' }),
+  // The required-services list probes `llm`, not `openrouter`: a deployment
+  // may be on Gemini or a local model, and doctor reports on the provider it
+  // actually uses. `openrouter` stays for the OpenRouter-specific credit check.
+  llm: async () => ({ ok: true, detail: 'a-model replied' }),
   whatsapp: async () => ({ ok: true, detail: 'HTTP 200' }),
   redis: async () => ({ ok: true, detail: 'PONG' }),
 };
@@ -100,9 +104,9 @@ describe('runDoctor', () => {
   });
 
   it('reports fail when a probe returns ok:false (key set but service rejected it)', async () => {
-    const probes = { ...allPassProbes, openrouter: async () => ({ ok: false, detail: 'HTTP 401' }) };
+    const probes = { ...allPassProbes, llm: async () => ({ ok: false, detail: 'HTTP 401' }) };
     const r = await runDoctor({ env: FULL_ENV, probes });
-    expect(r.probeResults.find((p) => p.name.includes('OpenRouter')).status).toBe('fail');
+    expect(r.probeResults.find((p) => p.name.includes('AI model')).status).toBe('fail');
     expect(r.ok).toBe(false);
   });
 
