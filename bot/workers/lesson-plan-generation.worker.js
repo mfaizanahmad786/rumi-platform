@@ -140,6 +140,27 @@ class LessonPlanGenerationWorker {
         hasPdf: !!result.pdfUrl
       });
 
+      // 3a. A locally rendered plan is already a file on disk — there is
+      // nothing to download. This is the no-Gamma path (content.service.js).
+      if (result.pdfPath) {
+        const localName = path.basename(result.pdfPath);
+        try {
+          await WhatsAppService.sendDocument(
+            phoneNumber,
+            result.pdfPath,
+            localName,
+            messages.successWithPdf(topic)
+          );
+          await LessonPlanQueueService.markCompleted(requestId, { pdfUrl: null, gammaUrl: null });
+          logToFile('✅ Locally rendered lesson plan delivered', { requestId, localName });
+        } finally {
+          // Always clean up, even if the send failed — the file is a
+          // render artefact, not something worth keeping around.
+          try { if (fs.existsSync(result.pdfPath)) fs.unlinkSync(result.pdfPath); } catch {}
+        }
+        return;
+      }
+
       // 3. Download and send PDF if available
       if (result.pdfUrl) {
         const safeTopic = topic.replace(/[^a-zA-Z0-9\s]/g, '').replace(/\s+/g, '_').substring(0, 50);

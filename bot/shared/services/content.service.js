@@ -144,6 +144,25 @@ ${lpTemplate.inputText}`;
    * @returns {Promise<Object>} {gammaUrl: string, pdfUrl: string}
    */
   static async generateLessonPlan(topic, fullUserMessage, language = 'en') {
+    // No Gamma key, no problem. Lesson plans used to be the ONLY feature that
+    // required a paid third-party account — quiz, reading and coaching
+    // reports have always rendered locally through html-to-pdf — which made
+    // the headline feature of a bring-your-own-keys project the one thing you
+    // could not bring your own keys for. The local renderer produces the same
+    // five-step plan with the LLM already configured.
+    //
+    // Gamma still wins when it is configured: its output is a designed
+    // document, and a deployment that pays for it should keep getting it.
+    if (!GAMMA_API_KEY) {
+      logToFile('Generating lesson plan locally (no GAMMA_API_KEY)', { topic, language });
+      // eslint-disable-next-line global-require -- lazy: avoids loading the render stack on Gamma deployments
+      const renderer = require('./lesson-plan-renderer.service');
+      const { pdfPath } = await renderer.generate({ topic, fullUserMessage, language });
+      // gammaUrl/pdfUrl stay null: there is nothing remote to link or fetch.
+      // pdfPath is the local file, which the worker prefers when present.
+      return { gammaUrl: null, pdfUrl: null, pdfPath };
+    }
+
     try {
       logToFile('Generating lesson plan with Gamma API', { topic, language });
       return await this._generateGammaContent(topic, fullUserMessage, 'document', 'lesson plan', language);
