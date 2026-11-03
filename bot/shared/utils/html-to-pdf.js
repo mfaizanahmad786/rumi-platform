@@ -29,13 +29,28 @@ const { logToFile } = require('./logger');
 function resolveChromiumPath() {
   // Explicit env vars first (PLAYWRIGHT_* preferred; PUPPETEER_* accepted for
   // compatibility with hosts that set it for a legacy Puppeteer wrapper).
+  //
+  // The macOS entries matter more than they look. Production runs on Linux,
+  // so the list was Linux-only — but the README invites anyone to clone this
+  // and run it in fifteen minutes, and a large share of those people are on a
+  // Mac. There, every candidate missed, Playwright threw, and the caller fell
+  // back to PDFKit. Reports still came out, which is why nobody noticed: what
+  // was lost was Urdu. Chromium's HarfBuzz pipeline shapes Nastaliq properly
+  // and PDFKit cannot (see reading/report.service.js), so a Mac developer
+  // silently got the one rendering path this product most needs to be right.
   const candidates = [
     process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
     process.env.PUPPETEER_EXECUTABLE_PATH,
+    // Linux
     '/usr/bin/chromium',
     '/usr/bin/chromium-browser',
     '/nix/var/nix/profiles/default/bin/chromium',
     '/usr/bin/google-chrome-stable',
+    // macOS. Chrome before Chromium because far more people have it, and
+    // Chrome IS Chromium for everything Playwright asks of it here.
+    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+    '/Applications/Chromium.app/Contents/MacOS/Chromium',
+    `${process.env.HOME || ''}/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`,
   ].filter(Boolean);
   for (const p of candidates) {
     try { if (fs.existsSync(p)) return p; } catch {}
@@ -214,4 +229,7 @@ process.on('exit', () => {
 process.on('SIGINT', () => closeBrowser().finally(() => process.exit()));
 process.on('SIGTERM', () => closeBrowser().finally(() => process.exit()));
 
-module.exports = { htmlToPdf, htmlToImage, closeBrowser };
+// resolveChromiumPath is exported for its test. Which browser this finds
+// decides whether Urdu reports are shaped by HarfBuzz or fall back to
+// PDFKit, and that is worth pinning somewhere other than a comment.
+module.exports = { htmlToPdf, htmlToImage, closeBrowser, resolveChromiumPath };
