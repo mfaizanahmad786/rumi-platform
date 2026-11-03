@@ -214,6 +214,44 @@ async function readChoice(question, options, defaultIndex) {
   }
 }
 
+// ── Waiting for a keypress ───────────────────────────────────────────────────
+
+/**
+ * Listens for a single keypress *alongside* something else that is already
+ * running, and can be called off when that something else finishes first.
+ *
+ * Every other reader here owns the terminal for as long as it is asking a
+ * question. This one does not: it exists so a long wait the user did not
+ * choose — the WhatsApp QR code, which blocks for two and a half minutes — has
+ * a way out that is not Ctrl+C. Ctrl+C aborts the whole wizard, so without
+ * this a user with no phone to hand had to kill setup and start over.
+ *
+ * `cancel()` must be called on every path, including the happy one, or the
+ * terminal is left in raw mode with the listener still attached.
+ *
+ * @returns {{promise: Promise<string|null>, cancel: () => void}}
+ *   `promise` resolves with the key pressed, or `null` if cancelled first, and
+ *   rejects with `PromptAbortError` on Ctrl+C.
+ */
+function waitForAnyKey() {
+  // No TTY means no keypresses to wait for. A promise that never settles is
+  // the honest answer: the caller races it, so "never" simply means the other
+  // side always wins — which is what should happen in CI or a pipe.
+  if (!isTty()) return { promise: new Promise(() => {}), cancel: () => {} };
+
+  let cancel = () => {};
+  const promise = withRawStdin(({ resolve, reject }) => {
+    // Assigned synchronously: withRawStdin calls `attach` inside the Promise
+    // executor, so this runs before the object below is built.
+    cancel = () => resolve(null);
+    return (chunk) => {
+      if (chunk.includes('')) { reject(new PromptAbortError()); return; }
+      resolve(chunk);
+    };
+  });
+  return { promise, cancel };
+}
+
 // ── The io facade ────────────────────────────────────────────────────────────
 
 /**
@@ -296,4 +334,6 @@ function createIo() {
   };
 }
 
-module.exports = { createIo, PromptAbortError, readLine, readSecret, readChoice, previewOf };
+module.exports = {
+  createIo, PromptAbortError, readLine, readSecret, readChoice, previewOf, waitForAnyKey,
+};

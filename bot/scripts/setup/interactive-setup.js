@@ -40,7 +40,7 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 
 const ui = require('./ui');
-const { createIo, PromptAbortError } = require('./prompt');
+const { createIo, PromptAbortError, waitForAnyKey } = require('./prompt');
 const { readEnvFile, writeEnvVars } = require('./env-file');
 const validators = require('./validators');
 const dbSetup = require('./db-setup');
@@ -603,7 +603,13 @@ async function stepExtras(io, env, save, opts = {}) {
  * our vocabulary, and asking it of a user makes them guess at an architecture
  * they have no reason to know.
  *
- * @returns {Promise<'baileys'|'meta'>}
+ * The third answer is not a channel at all. WhatsApp is the only step here
+ * that needs a second device in your hand, and someone setting Rumi up on a
+ * laptop at a desk — or showing it to a room — may simply not have one.
+ * Before this, the only way past the question was to start a pairing you could
+ * not finish and wait out its timeout.
+ *
+ * @returns {Promise<'baileys'|'meta'|'skip'>}
  */
 async function chooseChannelDriver(io) {
   return io.select('How are you using Rumi right now?', [
@@ -616,6 +622,11 @@ async function chooseChannelDriver(io) {
       value: 'meta',
       label: 'Real deployment — official WhatsApp Business number',
       hint: 'Needs a Meta Business account and their review process.',
+    },
+    {
+      value: 'skip',
+      label: 'Not right now — leave WhatsApp for later',
+      hint: 'Rumi still runs, and still answers on Slack, Teams and Discord. Run `rumi pair` when you want WhatsApp.',
     },
   ], 'baileys');
 }
@@ -644,8 +655,44 @@ async function linkSandbox(io) {
   console.log('');
 
   const { linkWhatsApp, releaseWhatsApp } = require('./link-whatsapp');
-  const result = await linkWhatsApp();
-  await releaseWhatsApp();
+
+  // The way out of a code you cannot scan.
+  //
+  // Pairing blocks for two and a half minutes waiting for a phone, and until
+  // now the only key that did anything during it was Ctrl+C — which ends the
+  // whole wizard. Someone at a desk with no second device had to sit through
+  // the timeout or start over.
+  //
+  // The listener is attached from `onQr` rather than up front, so the offer
+  // appears directly beneath the code it applies to, and a keystroke typed
+  // while Rumi is still connecting is not quietly read as "give up".
+  let giveUp;
+  let abort;
+  const skipped = new Promise((resolve, reject) => { giveUp = resolve; abort = reject; });
+
+  let listener = null;
+  const onQr = () => {
+    if (listener) return; // WhatsApp re-issues a QR every ~20s; one offer is enough
+    console.log(ui.dim('  No phone to hand? Press any key to skip — `rumi pair` links it later.'));
+    listener = waitForAnyKey();
+    // Ctrl+C is forwarded, not swallowed: it still ends the wizard, as it does
+    // at every other question.
+    listener.promise.then(() => giveUp({ ok: false, reason: 'skipped' }), abort);
+  };
+
+  let result;
+  try {
+    result = await Promise.race([linkWhatsApp({ onQr, cancel: skipped }), skipped]);
+  } finally {
+    if (listener) listener.cancel();
+    await releaseWhatsApp();
+  }
+
+  if (result.reason === 'skipped') {
+    console.log('');
+    console.log(ui.aside('Skipped. Nothing else is affected — run `rumi pair` whenever you want WhatsApp linked.'));
+    return { linked: false };
+  }
 
   if (result.ok) {
     console.log('');
@@ -728,6 +775,22 @@ async function stepChannel(io, env, save, opts = {}) {
   }
 
   const channel = await chooseChannelDriver(io);
+
+  // "Later" still has to leave a working deployment behind. The sandbox's
+  // settings are written anyway — Rumi boots, the other channels work, and
+  // `rumi pair` has somewhere to put the session when they come back — but
+  // nothing is paired and no code is drawn.
+  if (channel === 'skip') {
+    save({
+      CHANNEL_DRIVER: 'baileys',
+      QUEUE_DRIVER: 'bullmq',
+      CHANNEL_STATE_DIR: env.CHANNEL_STATE_DIR || '.channel-state',
+    });
+    console.log('');
+    console.log(ui.aside('Left for later. Everything else is set up — run `rumi pair` when you have a phone to hand.'));
+    return { channel: 'baileys', linked: false, skipped: true };
+  }
+
   const vars = { CHANNEL_DRIVER: channel };
 
   // The async pipeline (quiz reports, coaching, video) needs a queue, and the
@@ -883,7 +946,10 @@ async function stepMessagingChannels(io, env, save, opts = {}) {
     console.log(ui.say('That token is not working. Let\'s set Slack up again.'));
   }
 
-  console.log(ui.say('WhatsApp is set up. A teacher can also reach Rumi on Slack, at the same time, on the same account — nobody has to choose.'));
+  // Deliberately not "WhatsApp is set up" — WhatsApp can be skipped now, and a
+  // closing line that assumes it was done is the kind of small lie that makes
+  // a user distrust everything else the wizard tells them.
+  console.log(ui.say('A teacher can also reach Rumi on Slack, at the same time, on the same account — nobody has to choose.'));
   console.log('');
 
   const wantsSlack = await io.confirm('Also connect Slack?', false);

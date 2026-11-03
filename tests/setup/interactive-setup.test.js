@@ -70,6 +70,23 @@ describe('the channel question', () => {
     const { chooseChannelDriver } = loadWizard();
     expect(await chooseChannelDriver(fakeIo({ select: ['meta'] }))).toBe('meta');
   });
+
+  // WhatsApp is the only step that needs a second device in your hand. Someone
+  // setting Rumi up at a desk, or demonstrating it to a room, may not have
+  // one — and before this the only way past the question was to start a
+  // pairing they could not finish and sit out its timeout.
+  it('offers a way past WhatsApp entirely', async () => {
+    const { chooseChannelDriver } = loadWizard();
+    const io = fakeIo({ select: ['skip'] });
+
+    expect(await chooseChannelDriver(io)).toBe('skip');
+
+    const { options } = io.asked.select[0];
+    const skip = options.find((o) => o.value === 'skip');
+    expect(skip).toBeDefined();
+    // It has to say that Rumi still works, or "skip" reads as "give up".
+    expect(skip.hint).toMatch(/rumi pair/i);
+  });
 });
 
 describe('stepChannel', () => {
@@ -94,6 +111,35 @@ describe('stepChannel', () => {
     // as failed, because scheduling its report threw "SQS Queue not configured".
     expect(saved.QUEUE_DRIVER).toBe('bullmq');
     expect(saved.CHANNEL_STATE_DIR).toBe('.channel-state');
+  });
+
+  it('skipping WhatsApp still leaves a deployment that boots', async () => {
+    const { stepChannel } = loadWizard({ probes: allPass });
+    const { env, saved, save } = recordingSaver();
+    const io = fakeIo({ select: ['skip'] });
+
+    const result = await stepChannel(io, env, save);
+
+    expect(result).toMatchObject({ linked: false, skipped: true });
+    // Nothing was paired, so no QR was ever drawn — but the rest of Rumi has
+    // to start, and `rumi pair` needs somewhere to put the session later.
+    expect(saved.CHANNEL_DRIVER).toBe('baileys');
+    expect(saved.QUEUE_DRIVER).toBe('bullmq');
+    expect(saved.CHANNEL_STATE_DIR).toBe('.channel-state');
+    // The user is never left wondering how to finish the job.
+    expect(log.text).toMatch(/rumi pair/);
+  });
+
+  it('never asks a skipping user to confirm a scan', async () => {
+    const { stepChannel } = loadWizard({ probes: allPass });
+    const { env, save } = recordingSaver();
+    const io = fakeIo({ select: ['skip'] });
+
+    await stepChannel(io, env, save);
+
+    // `linkSandbox` opens with "Ready to scan the code?". Reaching it would
+    // mean the skip did nothing but add a question.
+    expect(io.asked.confirm).toHaveLength(0);
   });
 
   it('leaves a production deployment\'s queue choice alone', async () => {
@@ -142,6 +188,94 @@ describe('stepChannel', () => {
     const byLabel = Object.fromEntries(io.asked.ask.map((a) => [a.label, Boolean(a.secret)]));
     expect(byLabel['Access token']).toBe(true);
     expect(byLabel['Phone number ID']).toBe(false);
+  });
+});
+
+describe('the QR code', () => {
+  const PROMPT = '../../bot/scripts/setup/prompt';
+  const LINK = '../../bot/scripts/setup/link-whatsapp';
+
+  /**
+   * Loads the wizard with pairing stubbed out as a QR that is drawn and then
+   * never scanned — and with a keypress the test can deliver on demand.
+   *
+   * @returns {{linkSandbox: Function, pressKey: () => void, releaseWhatsApp: jest.Mock}}
+   */
+  function loadWithUnscannedQr() {
+    jest.resetModules();
+
+    let deliverKey = null;
+    jest.doMock(PROMPT, () => ({
+      ...jest.requireActual(PROMPT),
+      waitForAnyKey: () => ({
+        promise: new Promise((resolve) => { deliverKey = () => resolve('x'); }),
+        cancel: () => {},
+      }),
+    }));
+
+    const releaseWhatsApp = jest.fn(async () => {});
+    jest.doMock(LINK, () => ({
+      releaseWhatsApp,
+      linkWhatsApp: ({ onQr, cancel }) => {
+        onQr('a-qr-payload');                       // the code is now on screen
+        return new Promise((resolve) => { cancel.then(resolve, () => {}); });
+      },
+    }));
+
+    // eslint-disable-next-line global-require
+    const { linkSandbox } = require(WIZARD);
+    return { linkSandbox, releaseWhatsApp, pressKey: () => deliverKey() };
+  }
+
+  /** Lets the wizard reach the point where the QR is drawn. */
+  const flush = () => new Promise((resolve) => setImmediate(resolve));
+
+  it('can be abandoned with a keypress, rather than only with Ctrl+C', async () => {
+    const { linkSandbox, pressKey } = loadWithUnscannedQr();
+
+    const pending = linkSandbox(fakeIo({ confirm: [true] }));
+    await flush();
+    pressKey();
+
+    await expect(pending).resolves.toEqual({ linked: false });
+    // Ctrl+C would have ended the whole wizard; the point of the keypress is
+    // that it ends only this step.
+    expect(log.text).toMatch(/rumi pair/);
+  });
+
+  it('says so on screen, under the code — an escape nobody knows about is no escape', async () => {
+    const { linkSandbox, pressKey } = loadWithUnscannedQr();
+
+    const pending = linkSandbox(fakeIo({ confirm: [true] }));
+    await flush();
+    pressKey();
+    await pending;
+
+    expect(log.text).toMatch(/press any key to skip/i);
+  });
+
+  it('hands the WhatsApp session back when it is abandoned', async () => {
+    const { linkSandbox, pressKey, releaseWhatsApp } = loadWithUnscannedQr();
+
+    const pending = linkSandbox(fakeIo({ confirm: [true] }));
+    await flush();
+    pressKey();
+    await pending;
+
+    // A socket left open keeps the event loop alive: the wizard would appear
+    // to hang at the next step instead of finishing.
+    expect(releaseWhatsApp).toHaveBeenCalled();
+  });
+
+  it('does not apologise — skipping is a choice, not a failure', async () => {
+    const { linkSandbox, pressKey } = loadWithUnscannedQr();
+
+    const pending = linkSandbox(fakeIo({ confirm: [true] }));
+    await flush();
+    pressKey();
+    await pending;
+
+    expect(log.text).not.toMatch(/nothing was scanned|failed|try again/i);
   });
 });
 

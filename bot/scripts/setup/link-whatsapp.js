@@ -66,6 +66,9 @@ function storedNumber(connection) {
  * @param {object}   [opts]
  * @param {Function} [opts.onQr]      called the first time a QR is rendered
  * @param {number}   [opts.timeoutMs]
+ * @param {Promise}  [opts.cancel]    resolve it to give up waiting — the result
+ *   is then `{ok: false, reason: 'skipped'}`. Without this the only way out of
+ *   a QR you cannot scan is Ctrl+C, which takes the whole wizard with it.
  * @param {object}   [opts.connection] injectable for tests
  * @returns {Promise<{ok: boolean, number?: string, reason?: string, detail?: string}>}
  */
@@ -100,6 +103,10 @@ async function linkWhatsApp(opts = {}) {
     };
     connection.events.on('open', onOpen);
     connection.events.on('close', onClose);
+
+    // A rejection here is the caller's business, not ours — it means Ctrl+C,
+    // which the wizard handles by stopping altogether.
+    if (opts.cancel) opts.cancel.then(() => settle({ ok: false, reason: 'skipped' }), () => {});
 
     connection
       // `allowRepair` lets a QR appear even when a now-invalid creds.json is
