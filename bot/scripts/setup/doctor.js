@@ -212,6 +212,109 @@ const defaultProbes = {
 
     return { ok: res.ok, detail: `HTTP ${res.status}` };
   },
+
+  /**
+   * The LLM this deployment will ACTUALLY use, whichever provider that is.
+   *
+   * The `openrouter` probe above checks OpenRouter specifically, including its
+   * credit balance, and stays the right check for an OpenRouter deployment.
+   * This one asks the question that matters when the provider is something
+   * else — Gemini, Groq, a local Ollama — which llm-client.js has supported
+   * via LLM_BASE_URL since those became reachable. It sends the smallest real
+   * completion rather than checking a key endpoint, because "the key is
+   * valid" and "this model will answer" are different facts and only the
+   * second one makes Rumi work.
+   */
+  async llm(env) {
+    const base = (env.LLM_BASE_URL || '').trim().replace(/\/+$/, '');
+    if (!base) return defaultProbes.openrouter(env);
+
+    const key = env.LLM_API_KEY || env.OPENROUTER_API_KEY || env.OPENAI_API_KEY || '';
+    const model = (env.LLM_MODEL_OVERRIDE || env.LLM_MODEL || 'gpt-4o-mini').trim();
+    const body = {
+      model,
+      messages: [{ role: 'user', content: 'Reply with exactly: OK' }],
+      max_tokens: 20,
+    };
+    // Reasoning models spend the whole budget thinking and return no content;
+    // honour the same setting the runtime uses so the probe matches reality.
+    if ((env.LLM_REASONING_EFFORT || '').trim()) body.reasoning_effort = env.LLM_REASONING_EFFORT.trim();
+
+    const res = await fetch(`${base}/chat/completions`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+    const text = await res.text();
+    if (!res.ok) {
+      // Providers disagree on the envelope; some wrap the error in a list.
+      let message = `HTTP ${res.status}`;
+      try {
+        let parsed = JSON.parse(text);
+        if (Array.isArray(parsed)) parsed = parsed[0];
+        if (parsed?.error?.message) message = `${res.status}: ${String(parsed.error.message).slice(0, 140)}`;
+      } catch { /* keep the status */ }
+      return { ok: false, detail: message };
+    }
+
+    try {
+      let parsed = JSON.parse(text);
+      if (Array.isArray(parsed)) parsed = parsed[0];
+      const content = parsed?.choices?.[0]?.message?.content;
+      if (!content) {
+        return {
+          ok: false,
+          detail: `${model} answered with no content — if it is a reasoning model, set LLM_REASONING_EFFORT=none`,
+        };
+      }
+      return { ok: true, detail: `${model} replied` };
+    } catch {
+      return { ok: false, detail: 'provider returned something that was not a chat completion' };
+    }
+  },
+
+  /**
+   * A Switch server, and whether this agent's credentials work against it.
+   *
+   * /health is public and is the correct probe for "is this the bridge base
+   * URL" — a 401 means the right host and the wrong path, which is almost
+   * always the Gateway URL given instead of the agent bridge.
+   */
+  async switchServer(env) {
+    const base = (env.SWITCH_BRIDGE_URL || '').trim().replace(/\/+$/, '');
+    if (!base) return { ok: false, detail: 'SWITCH_BRIDGE_URL is not set' };
+
+    const health = await fetch(`${base}/health`);
+    if (!health.ok) {
+      return {
+        ok: false,
+        detail: health.status === 401
+          ? `HTTP 401 — that looks like the Gateway URL, not the agent bridge`
+          : `HTTP ${health.status} from ${base}/health`,
+      };
+    }
+
+    if (!env.SWITCH_AGENT_ID || !env.SWITCH_AGENT_API_KEY) {
+      return { ok: false, detail: 'server reachable, but SWITCH_AGENT_ID / SWITCH_AGENT_API_KEY are missing' };
+    }
+
+    const rooms = await fetch(`${base}/agents/${env.SWITCH_AGENT_ID}/ops/list_rooms`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${env.SWITCH_AGENT_API_KEY}`, 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    if (!rooms.ok) return { ok: false, detail: `agent credentials rejected (HTTP ${rooms.status})` };
+
+    try {
+      const { result } = await rooms.json();
+      const n = Array.isArray(result) ? result.length : 0;
+      return { ok: true, detail: n === 1 ? 'connected · 1 room' : `connected · ${n} rooms` };
+    } catch {
+      return { ok: true, detail: 'connected' };
+    }
+  },
+
   async whatsapp(env) {
     const res = await fetch(
       `https://graph.facebook.com/v21.0/${env.PHONE_NUMBER_ID}?access_token=${env.WHATSAPP_TOKEN}`,

@@ -89,3 +89,6 @@ supabase/.temp/
 **/supabase/.temp/
 dashboard/supabase/.temp/
 .env.provisioner
+
+# Switch Console session artefacts (agent working dirs, local config)
+.switch/

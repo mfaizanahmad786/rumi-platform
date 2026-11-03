@@ -50,7 +50,7 @@ const summary = require('./summary');
 const ROOT = path.resolve(__dirname, '../../..');
 const ENV_PATH = path.join(ROOT, '.env');
 const ENV_TEMPLATE_PATH = path.join(ROOT, '.env.template');
-const TOTAL_STEPS = 6;
+const TOTAL_STEPS = 7;
 const LOCAL_REDIS = { url: 'redis://localhost:6379', container: 'rumi-redis', image: 'redis:7-alpine' };
 
 // ── Shared plumbing ──────────────────────────────────────────────────────────
@@ -299,33 +299,110 @@ async function ensureTables(io, env) {
 
 // ── Step 2: the AI ───────────────────────────────────────────────────────────
 
+/**
+ * The providers this wizard can set up. Each is just a base URL and a key —
+ * llm-client.js talks the OpenAI chat-completions shape to all of them, so
+ * adding one here is a row, not an integration.
+ */
+const LLM_PROVIDERS = [
+  {
+    id: 'openrouter',
+    label: 'OpenRouter — one account, 500+ models',
+    baseUrl: '',            // the built-in default; no LLM_BASE_URL needed
+    keyVar: 'OPENROUTER_API_KEY',
+    keyUrl: 'https://openrouter.ai/keys',
+    model: '',              // call sites pick per-call models
+    note: 'Needs a few dollars of credit. A key with none answers a greeting and then fails on anything substantial.',
+  },
+  {
+    id: 'gemini',
+    label: 'Google Gemini — generous free tier',
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+    keyVar: 'LLM_API_KEY',
+    keyUrl: 'https://aistudio.google.com/apikey',
+    model: 'gemini-3.6-flash',
+    reasoning: 'none',      // 3.x models think first and blow small token caps
+    note: 'Free, but the daily request limit is low — fine for trying Rumi, not for a classroom.',
+  },
+  {
+    id: 'compatible',
+    label: 'Something else that speaks the OpenAI API',
+    baseUrl: null,          // asked for
+    keyVar: 'LLM_API_KEY',
+    keyUrl: null,
+    model: null,            // asked for
+    note: 'Groq, DeepSeek, Together, or a local Ollama / LM Studio.',
+  },
+];
+
 async function stepBrain(io, env, save, opts = {}) {
   beginStep(2, 'How Rumi thinks');
-  console.log(ui.say('Rumi reaches AI models through OpenRouter — one account, many models, so you are never locked to a single provider. A typical reply costs a fraction of a cent.'));
+  console.log(ui.say('Rumi needs an AI model to write lesson plans, score reading and hold a conversation. Any provider that speaks the OpenAI API will do — pick whichever you already have.'));
 
-  if (hasAll(env, ['OPENROUTER_API_KEY']) && !opts.reconfigure) {
-    const check = await checkLive('Checking the AI key you already have…', 'openrouter', env, (d) => `AI already connected ${ui.dim(d)}`);
+  const alreadySet = isProvided(env, 'LLM_BASE_URL') || hasAll(env, ['OPENROUTER_API_KEY']);
+  if (alreadySet && !opts.reconfigure) {
+    const check = await checkLive('Checking the AI you already have…', 'llm', env, (d) => `AI already connected ${ui.dim(d)}`);
     if (check.ok) return;
     console.log(ui.say('Let us set that up again.'));
   }
 
   console.log('');
-  console.log(ui.steps([
-    'Open https://openrouter.ai/keys and create a key',
-    'Add a few dollars of credit at https://openrouter.ai/settings/credits',
-  ]));
-  console.log(ui.aside('The credit matters: a key with none will answer a greeting and then fail on anything substantial, like generating a quiz. That failure looks like a bug in Rumi, so it is worth doing now.'));
+  const choice = await io.select('Which one?', LLM_PROVIDERS.map((p) => ({
+    label: p.label,
+    hint: p.note,
+    value: p.id,
+  })), 'openrouter');
+  const provider = LLM_PROVIDERS.find((p) => p.id === choice) || LLM_PROVIDERS[0];
+
+  let baseUrl = provider.baseUrl;
+  if (baseUrl === null) {
+    baseUrl = await io.ask('API base URL', {
+      hint: 'The address its chat-completions endpoint lives under — e.g. https://api.groq.com/openai/v1 or http://localhost:11434/v1.',
+      validate: (input) => {
+        const value = String(input || '').trim().replace(/\/+$/, '');
+        if (!value) return { ok: false, reason: 'This can\'t be empty.' };
+        if (!/^https?:\/\//.test(value)) return { ok: false, reason: 'Needs to start with http:// or https://.' };
+        if (/\/chat\/completions$/.test(value)) {
+          return { ok: false, reason: 'Leave off /chat/completions — Rumi adds that itself.' };
+        }
+        return { ok: true, value };
+      },
+    });
+  }
+
+  if (provider.keyUrl) {
+    console.log('');
+    console.log(ui.steps([`Open ${provider.keyUrl} and create a key`]));
+    if (provider.note) console.log(ui.aside(provider.note));
+  }
 
   for (;;) {
     const key = await io.ask('API key', {
       secret: true,
-      fallback: prefill(env, 'OPENROUTER_API_KEY'),
-      validate: validators.openrouterKey,
+      fallback: prefill(env, provider.keyVar),
+      validate: provider.id === 'openrouter' ? validators.openrouterKey : undefined,
     });
-    save({ OPENROUTER_API_KEY: key });
 
-    const spin = ui.spinner('Checking the key and its balance…');
-    const check = await probe('openrouter', env);
+    let model = provider.model;
+    if (model === null) {
+      model = await io.ask('Model name', {
+        hint: 'Exactly as that provider names it — Rumi sends this verbatim.',
+        fallback: prefill(env, 'LLM_MODEL_OVERRIDE'),
+      });
+    }
+
+    // Written together so a half-applied provider never ends up in .env: a
+    // base URL without its key is a deployment that fails at the first
+    // message rather than at startup.
+    save({
+      [provider.keyVar]: key,
+      LLM_BASE_URL: baseUrl || '',
+      LLM_MODEL_OVERRIDE: model || '',
+      LLM_REASONING_EFFORT: provider.reasoning || '',
+    });
+
+    const spin = ui.spinner('Asking it to say hello…');
+    const check = await probe(baseUrl ? 'llm' : 'openrouter', env);
     if (check.ok) {
       spin.succeed(`AI connected ${ui.dim(check.detail)}`);
       return;
@@ -333,13 +410,22 @@ async function stepBrain(io, env, save, opts = {}) {
 
     // A rejected key is a different problem from a valid key with no money on
     // it, and only the first is worth re-asking about.
-    const noCredit = /credit/i.test(check.detail);
-    if (noCredit) {
+    if (/credit/i.test(check.detail)) {
       spin.warn(check.detail);
       const carryOn = await io.confirm('That key works but cannot pay for a request yet. Carry on and add credit later?', true);
       if (carryOn) return;
+    } else if (/no content/i.test(check.detail)) {
+      // Worth naming, because it looks like a dead key and is not one.
+      spin.warn(check.detail);
+      save({ LLM_REASONING_EFFORT: 'none' });
+      const retry = await probe('llm', env);
+      if (retry.ok) {
+        console.log(ui.ok(`Fixed — that model reasons before answering, so Rumi now tells it not to. ${ui.dim(retry.detail)}`));
+        return;
+      }
+      console.log(ui.aside(retry.detail));
     } else {
-      spin.fail(ui.paint('danger', `That key was rejected (${check.detail})`));
+      spin.fail(ui.paint('danger', `That did not work (${check.detail})`));
     }
   }
 }
@@ -890,6 +976,157 @@ async function stepDiscordChannel(io, env, save, opts = {}) {
   }
 }
 
+// ── Step 7: Switch ───────────────────────────────────────────────────────────
+
+/**
+ * Switch is the odd one out among the channels, and the difference is worth
+ * stating before the questions start: Slack and Discord each connect Rumi to
+ * ONE app, while Switch is a server that bridges Slack, Teams, Discord,
+ * Telegram and Mattermost itself. Rumi speaks one protocol to it and reaches
+ * all five — and, unlike the others, joins ROOMS where people and other
+ * agents work together rather than a one-to-one chat with a bot.
+ *
+ * Two HTTP calls, and the second is the one people miss. Registering an agent
+ * leaves it addressable only by its owner, so every teacher who is not you
+ * gets "You're not permitted to direct messages to me in this room" while the
+ * agent's own logs say nothing at all. Opening that policy needs operator
+ * credentials, because an agent may not change its own.
+ */
+async function stepSwitchChannel(io, env, save, opts = {}) {
+  const configured = hasAll(env, ['SWITCH_BRIDGE_URL', 'SWITCH_AGENT_ID', 'SWITCH_AGENT_API_KEY']);
+  if (configured && !opts.reconfigure) {
+    const check = await checkLive('Checking the Switch server you already have…', 'switchServer', env, (d) => `Switch already connected ${ui.dim(d)}`);
+    if (check.ok) return { switch: true };
+    console.log(ui.say('That connection is not working. Let\'s set Switch up again.'));
+  }
+
+  console.log('');
+  console.log(ui.say('Switch (switchagents.ai) is a server you run yourself that puts Rumi in shared rooms alongside your team — and bridges those rooms into Slack, Teams, Discord, Telegram or Mattermost. One connection, every platform.'));
+  console.log(ui.aside('Skip this if you are not running a Switch server. Nothing else depends on it.'));
+  console.log('');
+
+  const wants = await io.confirm('Connect Rumi to a Switch server?', false);
+  if (!wants) return { switch: false };
+
+  const bridgeUrl = await io.ask('Switch API address', {
+    hint: 'The agent bridge, usually port 8000 — NOT the Gateway on 3000. If GET <url>/health returns {"status":"ok"}, it is the right one.',
+    fallback: prefill(env, 'SWITCH_BRIDGE_URL') || 'http://127.0.0.1:8000',
+    validate: (input) => {
+      const value = String(input || '').trim().replace(/\/+$/, '');
+      if (!value) return { ok: false, reason: 'This can\'t be empty.' };
+      if (!/^https?:\/\//.test(value)) return { ok: false, reason: 'Needs to start with http:// or https://.' };
+      return { ok: true, value };
+    },
+  });
+
+  const spin = ui.spinner('Looking for the server…');
+  try {
+    const health = await fetch(`${bridgeUrl}/health`);
+    if (!health.ok) {
+      spin.fail(ui.paint('danger', health.status === 401
+        ? 'That answered 401 — it looks like the Gateway address rather than the agent bridge.'
+        : `That answered HTTP ${health.status}.`));
+      return { switch: false };
+    }
+    spin.succeed('Switch server found');
+  } catch (err) {
+    spin.fail(ui.paint('danger', `Could not reach it: ${err.message}`));
+    return { switch: false };
+  }
+
+  const regToken = await io.ask('Registration token', {
+    secret: true,
+    hint: 'AGENT_REGISTRATION_TOKEN from the Switch server\'s environment. It registers agents and is rejected everywhere else — not the same thing as the key Rumi will use afterwards.',
+  });
+  const agentName = await io.ask('Name teachers will use to address Rumi', {
+    fallback: prefill(env, 'SWITCH_AGENT_NAME') || 'rumi',
+    hint: 'They type @<this>. Avoid a name the messaging app already uses for a bot — the app wins that collision and the mention never reaches Switch.',
+  });
+
+  const regSpin = ui.spinner(`Registering "${agentName}"…`);
+  let agent;
+  try {
+    const res = await fetch(`${bridgeUrl}/agents`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${regToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: agentName,
+        description: 'Rumi — AI teaching assistant. Lesson plans, classroom coaching, reading assessment.',
+        connector_type: 'Rumi Platform',
+        // always_on: Rumi is a service, reachable independent of any room,
+        // rather than a session somebody launches.
+        integration_profile: {
+          connection_model: 'always_on',
+          message_exchange: true,
+          pre_invocation_mediation: [],
+          post_invocation_mediation: [],
+          event_reporting: [],
+        },
+        metadata: { product: 'rumi-platform' },
+        overwrite: true,
+      }),
+    });
+    const text = await res.text();
+    if (!res.ok) {
+      regSpin.fail(ui.paint('danger', `Registration refused (HTTP ${res.status}): ${text.slice(0, 160)}`));
+      return { switch: false };
+    }
+    agent = JSON.parse(text);
+    regSpin.succeed(`Registered as "${agentName}"`);
+  } catch (err) {
+    regSpin.fail(ui.paint('danger', `Registration failed: ${err.message}`));
+    return { switch: false };
+  }
+
+  // The API key is returned exactly once; there is no route that reads it back.
+  save({
+    SWITCH_BRIDGE_URL: bridgeUrl,
+    SWITCH_AGENT_ID: agent.id,
+    SWITCH_AGENT_API_KEY: agent.api_key,
+    SWITCH_AGENT_NAME: agentName,
+  });
+
+  console.log('');
+  console.log(ui.say('One more thing, and it is the step people miss: a new agent can only be addressed by its owner. Every other teacher gets "You\'re not permitted to direct messages to me in this room", and nothing in Rumi\'s logs explains why.'));
+  console.log(ui.aside('Opening it needs the Switch operator login, because an agent cannot change its own permissions.'));
+  console.log('');
+
+  const openIt = await io.confirm('Let any teacher in the room address Rumi?', true);
+  if (!openIt) {
+    console.log(ui.aside('Left as owner-only. Change it later in Switch Console: Agents → ' + agentName + ' → addressing.'));
+    return { switch: true };
+  }
+
+  const email = await io.ask('Switch operator email', { fallback: prefill(env, 'SWITCH_GATEWAY_EMAIL') });
+  const password = await io.ask('Switch operator password', { secret: true });
+
+  const polSpin = ui.spinner('Opening the addressing policy…');
+  try {
+    const login = await fetch(`${bridgeUrl}/gateway/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+    if (!login.ok) throw new Error(`sign-in refused (HTTP ${login.status})`);
+    const cookie = (login.headers.getSetCookie?.() || []).map((c) => c.split(';')[0]).join('; ');
+
+    // policy: null CLEARS the policy, which is what "open to anyone" is.
+    const res = await fetch(`${bridgeUrl}/gateway/agents/${agent.id}/addressing-policy`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({ policy: null }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    polSpin.succeed('Anyone in the room can now address Rumi');
+  } catch (err) {
+    polSpin.warn(`Could not open it (${err.message})`);
+    console.log(ui.aside(`Rumi is registered and will connect, but only you can address it until you fix this in Switch Console: Agents → ${agentName} → addressing → anyone.`));
+  }
+
+  const check = await checkLive('Checking the connection…', 'switchServer', env, (d) => `Switch connected ${ui.dim(d)}`);
+  return { switch: check.ok };
+}
+
 // ── Screens ──────────────────────────────────────────────────────────────────
 
 function welcome(env) {
@@ -970,8 +1207,10 @@ async function main(argv = process.argv) {
     const channelResult = await stepChannel(io, env, save, opts);
     finishStep('Connecting WhatsApp');
     const messagingResult = await stepMessagingChannels(io, env, save, opts);
+    finishStep('Other places teachers can reach Rumi');
+    const switchResult = await stepSwitchChannel(io, env, save, opts);
 
-    await finish(env, { ...channelResult, ...messagingResult });
+    await finish(env, { ...channelResult, ...messagingResult, ...switchResult });
   } catch (err) {
     if (err instanceof PromptAbortError || err.aborted) {
       console.log('');
@@ -993,6 +1232,7 @@ if (require.main === module) {
 module.exports = {
   main, welcome, finish,
   stepDatabase, stepBrain, stepMemory, stepExtras, stepChannel, stepMessagingChannels, stepDiscordChannel,
+  stepSwitchChannel, LLM_PROVIDERS,
   ensureTables, chooseChannelDriver, collectMetaCredentials, linkSandbox, channelAlreadyWorking,
   createSaver, hasAll, isProvided, prefill, isTemplateSuggestion, startLocalRedis, dockerAvailable, probe,
   beginStep, finishStep, walkSlackAppConfig, walkDiscordAppConfig,

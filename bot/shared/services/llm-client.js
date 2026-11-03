@@ -74,6 +74,46 @@ const IS_OPENROUTER = !CUSTOM_BASE_URL && PROVIDER !== 'openai';
 const REASONING_EFFORT = (process.env.LLM_REASONING_EFFORT || '').trim();
 
 /**
+ * How long one LLM call may stall before it is given up on, and how many
+ * times it may be retried.
+ *
+ * The OpenAI SDK defaults to a TEN MINUTE timeout retried twice, and this
+ * client was built without overriding either — so a provider that accepts the
+ * connection and then says nothing could hold a request for half an hour.
+ *
+ * That is not a theoretical bound; it was reported from a staffroom twice in
+ * one day, in two unrelated features:
+ *
+ *   "I asked you for a lesson plan twice and both times it just stopped."
+ *   "the reading assessment has been stuck for ten minutes now."
+ *
+ * Both features acknowledge first and work second — the teacher is told "I'm
+ * preparing your lesson plan" or "this will take 3-5 minutes" BEFORE any
+ * model is called. Every step after that ack runs through this one client, so
+ * a stalled provider means the apology code is simply never reached and the
+ * teacher waits on a promise nothing will keep. "Stuck for ten minutes" is
+ * one SDK timeout window, seen from the other end.
+ *
+ * Ninety seconds is chosen against what the teacher was promised rather than
+ * what a model typically needs: she was told minutes, so she must hear
+ * something back within minutes. One retry, because a stalled endpoint is
+ * rarely fixed by asking it again immediately, and two more ten-minute waits
+ * is the bug.
+ *
+ * Raise LLM_TIMEOUT_MS for a slow self-hosted model; lower it for a free tier
+ * that fails often and should fail fast.
+ */
+const TIMEOUT_MS = Number.parseInt(process.env.LLM_TIMEOUT_MS || '', 10);
+const MAX_RETRIES = Number.parseInt(process.env.LLM_MAX_RETRIES || '', 10);
+
+const REQUEST_LIMITS = {
+  timeout: Number.isFinite(TIMEOUT_MS) && TIMEOUT_MS > 0 ? TIMEOUT_MS : 90_000,
+  // 0 is a legitimate answer ("never retry"), so this checks finiteness
+  // rather than truthiness — `|| 1` would quietly turn it into one retry.
+  maxRetries: Number.isFinite(MAX_RETRIES) && MAX_RETRIES >= 0 ? MAX_RETRIES : 1,
+};
+
+/**
  * When LLM_MODEL_OVERRIDE is set, every chat completion through this client
  * uses it, whatever model the call site asked for. Unset (the default), every
  * call site keeps the model it names and nothing changes.
@@ -129,10 +169,11 @@ function createLLMClient() {
         || process.env.OPENROUTER_API_KEY
         || 'not-required',
       baseURL: CUSTOM_BASE_URL,
+      ...REQUEST_LIMITS,
     });
   } else if (PROVIDER === 'openai') {
     // Direct OpenAI — no baseURL override
-    client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, ...REQUEST_LIMITS });
   } else {
     // Default: OpenRouter — uses OpenAI-compatible API
     client = new OpenAI({
@@ -142,6 +183,7 @@ function createLLMClient() {
         'HTTP-Referer': process.env.APP_URL || '',
         'X-Title': 'Rumi Teaching Assistant',
       },
+      ...REQUEST_LIMITS,
     });
   }
 
@@ -210,6 +252,8 @@ function getProviderInfo() {
     provider: CUSTOM_BASE_URL ? 'compatible' : PROVIDER,
     model: DEFAULT_MODEL,
     modelOverride: MODEL_OVERRIDE || null,
+    timeoutMs: REQUEST_LIMITS.timeout,
+    maxRetries: REQUEST_LIMITS.maxRetries,
     baseURL,
   };
 }
