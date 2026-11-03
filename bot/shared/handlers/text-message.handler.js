@@ -1447,15 +1447,19 @@ async function handleTextMessage(message, from, messageBody, user = null) {
     });
     if (esc.match) {
       try {
-        const isComplaint = await EscalationService.confirm(messageBody);
-        if (isComplaint) {
+        // Two things are worth passing on and they are not the same: a defect
+        // is a fault in something that exists, a request is a gap where
+        // nothing does. The model decides which, and it regularly disagrees
+        // with what the regex gate suspected.
+        const kind = await EscalationService.classify(messageBody);
+        if (kind) {
           typingController.stop();
-          await EscalationService.send({ messageBody, teacherIdentifier: from });
-          await WhatsAppService.sendMessage(from, EscalationService.acknowledgement(responseLanguage));
-          logToFile('Escalated a teacher bug report', { signal: esc.signal });
+          await EscalationService.send({ messageBody, teacherIdentifier: from, kind });
+          await WhatsAppService.sendMessage(from, EscalationService.acknowledgement(responseLanguage, kind));
+          logToFile('Escalated a teacher report', { kind, suspected: esc.suspected, signal: esc.signal });
           return;
         }
-        logToFile('Escalation signal did not survive classification', { signal: esc.signal });
+        logToFile('Escalation signal did not survive classification', { suspected: esc.suspected, signal: esc.signal });
       } catch (error) {
         // Fall through to normal handling — a broken escalation path must not
         // swallow the teacher's message.

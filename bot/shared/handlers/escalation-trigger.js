@@ -67,6 +67,28 @@ const COMPLAINT_SIGNALS = [
 ];
 
 /**
+ * Signals that a message might be asking for something Rumi cannot do.
+ *
+ * A request is not a defect, and the difference is worth keeping: "nothing
+ * came back" is a fault, "I wish it could do X" is a gap. Both deserve to
+ * reach the people who build Rumi and both previously died in the chat, but
+ * an engineer picking one up needs to know which they are holding.
+ */
+const REQUEST_SIGNALS = [
+  /\b(i wish|wish (you|it)|would be (great|good|nice|helpful)|it would help if)\b/i,
+  // "add/support/include" only. NOT "make" or "build": "can you make me a
+  // lesson plan" is the single most common thing a teacher says to Rumi, and
+  // promoting it would mean a classifier call on nearly every request.
+  /\b(can|could|would) you (please )?(add|support|include)\b/i,
+  /\b(is there|do you have) (a |any )?way to\b/i,
+  /\b(please )?add (a|an|the)?\s*\w+\s*(command|option|button|feature)\b/i,
+  /\bfeature request\b/i,
+  // Urdu
+  /شامل کر/,
+  /کاش/,
+];
+
+/**
  * Phrases that look like complaints but are about the CLASSROOM, not Rumi.
  * A teacher saying "my students keep getting this wrong" is describing the
  * exact problem Rumi exists to help with — escalating that to engineers
@@ -79,6 +101,8 @@ const CLASSROOM_NOT_RUMI = [
 
 /**
  * Does this message deserve the stage-two LLM check?
+ *
+ * Fires on a complaint OR a request — the model tells them apart afterwards.
  *
  * Side-effect-free and synchronous, so it can run on every inbound message
  * without cost. Returns a reason so the log says WHY a message was promoted,
@@ -97,7 +121,9 @@ function evaluateEscalationTrigger({ messageBody, escalationConfigured }) {
   const text = String(messageBody || '').trim();
   if (text.length < 15) return { match: false, reason: 'too_short' };
 
-  const signal = COMPLAINT_SIGNALS.find((rx) => rx.test(text));
+  const complaint = COMPLAINT_SIGNALS.find((rx) => rx.test(text));
+  const request = REQUEST_SIGNALS.find((rx) => rx.test(text));
+  const signal = complaint || request;
   if (!signal) return { match: false, reason: 'no_signal' };
 
   // A complaint that names students is about teaching, not about Rumi —
@@ -107,11 +133,14 @@ function evaluateEscalationTrigger({ messageBody, escalationConfigured }) {
   const namesRumi = /\brumi\b/i.test(text) || /\byou(r)?\b/i.test(text);
   if (aboutClassroom && !namesRumi) return { match: false, reason: 'about_the_classroom' };
 
-  return { match: true, signal: String(signal) };
+  // What the gate SUSPECTS, not what it concludes — the model decides, and
+  // regularly disagrees. Carried so the log says why a message was promoted.
+  return { match: true, signal: String(signal), suspected: complaint ? 'defect' : 'request' };
 }
 
 module.exports = {
   COMPLAINT_SIGNALS,
+  REQUEST_SIGNALS,
   CLASSROOM_NOT_RUMI,
   evaluateEscalationTrigger,
 };

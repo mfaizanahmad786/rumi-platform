@@ -55,6 +55,27 @@ describe('escalation trigger — the cheap gate', () => {
     expect(on(text).match).toBe(false);
   });
 
+  it.each([
+    ['I wish there was a /help command', 'request'],
+    ['could you add Sindhi to the languages?', 'request'],
+    ['it would help if I could download it as Word', 'request'],
+  ])('promotes a request: %s', (text, suspected) => {
+    const d = on(text);
+    expect(d.match).toBe(true);
+    expect(d.suspected).toBe(suspected);
+  });
+
+  it('does NOT promote the most common thing a teacher says', () => {
+    // "can you make me X" is ordinary use of a feature that works. Matching it
+    // would put a classifier call on nearly every lesson-plan request.
+    expect(on('can you make me a lesson plan on fractions for grade 3').match).toBe(false);
+    expect(on('could you make a quiz about the water cycle for me').match).toBe(false);
+  });
+
+  it('labels a complaint as a suspected defect, not a request', () => {
+    expect(on('I asked twice and nothing ever came').suspected).toBe('defect');
+  });
+
   it('does nothing at all when no destination is configured', () => {
     const d = evaluateEscalationTrigger({
       messageBody: 'I asked twice and nothing ever came',
@@ -90,14 +111,50 @@ describe('escalation service', () => {
     expect(svc.isConfigured(ENV)).toBe(true);
   });
 
+  it.each([
+    ['defect', 'defect'],
+    ['request', 'request'],
+    ['neither', null],
+    ['Request.', 'request'],
+  ])('maps the model answer %s to %s', async (answer, expected) => {
+    const svc = load();
+    await expect(svc.classify('something', { llm: fakeLlm(answer) })).resolves.toBe(expected);
+  });
+
+  it('briefs the agent differently for a request than a defect', async () => {
+    const svc = load();
+    const sent = [];
+    const conn = { postMessage: jest.fn((_r, c) => { sent.push(c); return Promise.resolve({}); }) };
+
+    await svc.send({ messageBody: 'I wish there was a /help command', kind: 'request', teacherIdentifier: 't', env: ENV, connection: conn });
+    await svc.send({ messageBody: 'nothing ever came back', kind: 'defect', teacherIdentifier: 't', env: ENV, connection: conn });
+
+    // Reproducing a fault and designing a feature are different jobs; the
+    // headline and the instruction both have to say which one this is.
+    expect(sent[0]).toContain('cannot do yet');
+    expect(sent[0]).toMatch(/pull request/i);
+    expect(sent[1]).toContain('is broken');
+    expect(sent[1]).toMatch(/reproduce/i);
+  });
+
+  it('tells a teacher asking for something different from a teacher reporting a fault', () => {
+    const svc = load();
+    const request = svc.acknowledgement('en', 'request');
+    const defect = svc.acknowledgement('en', 'defect');
+    expect(request).not.toBe(defect);
+    // Neither may promise it will happen — that is how the old apology failed.
+    expect(request).toMatch(/can'?t promise/i);
+    expect(defect).toMatch(/can'?t promise/i);
+  });
+
   it('confirms a defect report', async () => {
     const svc = load();
-    await expect(svc.confirm('nothing ever came', { llm: fakeLlm('yes') })).resolves.toBe(true);
+    await expect(svc.confirm('nothing ever came', { llm: fakeLlm('defect') })).resolves.toBe(true);
   });
 
   it('rejects what the model says is not a defect', async () => {
     const svc = load();
-    await expect(svc.confirm('my students struggle', { llm: fakeLlm('no') })).resolves.toBe(false);
+    await expect(svc.confirm('my students struggle', { llm: fakeLlm('neither') })).resolves.toBe(false);
   });
 
   it('treats an LLM failure as NOT a complaint, rather than escalating everything', async () => {
@@ -105,6 +162,7 @@ describe('escalation service', () => {
     const broken = { chat: { completions: { create: jest.fn().mockRejectedValue(new Error('503')) } } };
     // A model being down must not turn every frustrated message into a ticket.
     await expect(svc.confirm('it is broken', { llm: broken })).resolves.toBe(false);
+    await expect(svc.classify('it is broken', { llm: broken })).resolves.toBeNull();
   });
 
   it('posts the teacher\'s words VERBATIM, addressed to the agent', async () => {

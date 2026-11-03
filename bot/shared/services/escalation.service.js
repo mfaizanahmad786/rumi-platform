@@ -43,38 +43,48 @@ function isConfigured(env = process.env) {
 }
 
 /**
- * Is this really a complaint about Rumi?
+ * What IS this, in terms engineering can act on?
  *
- * The prompt is deliberately narrow about what counts. "My students found
+ * Three answers, because two of them are worth passing on and they are not
+ * the same thing. "Nothing came back" is a fault in something that exists;
+ * "I wish it could do X" is a gap where nothing exists yet. Both died in the
+ * chat before this, and both deserve to reach the people who build Rumi —
+ * but whoever picks one up needs to know which they are holding, because
+ * reproducing a defect and designing a feature are different jobs.
+ *
+ * The third answer is the important one to get right. "My students found
  * fractions hard" is the problem Rumi EXISTS to help with, and escalating it
- * to engineers would be both useless and faintly insulting; "your lesson plan
- * never arrived" is a defect. The distinction is the whole job, so it is
- * stated as examples rather than adjectives.
+ * to engineers would be both useless and faintly insulting. The prompt draws
+ * that line with examples rather than adjectives.
  *
- * Returns false on any error: an LLM that is down must not turn every
+ * Returns null on any error: an LLM that is down must not turn every
  * frustrated message into an engineering ticket.
+ *
+ * @returns {Promise<'defect'|'request'|null>}
  */
-async function confirm(messageBody, { llm } = {}) {
+async function classify(messageBody, { llm } = {}) {
   // eslint-disable-next-line global-require -- lazy: keeps this module free of the LLM stack until used
   const client = llm || require('./llm-client').getClient();
 
   const prompt = `A teacher wrote this to Rumi, an AI teaching assistant.
 
-Decide whether they are reporting that RUMI IS BROKEN — a defect in the product — or something else.
+Answer with ONE word: defect, request, or neither.
 
-BROKEN (answer yes):
+defect — they are reporting that something in Rumi IS BROKEN:
 - "I asked for a lesson plan twice and nothing came"
 - "you replied in English when I write in Urdu"
 - "the voice note thing gave an error"
-- "it has been stuck for ten minutes"
 
-NOT BROKEN (answer no):
-- "my students keep getting fractions wrong"      (a teaching problem, which is what Rumi is for)
-- "I am exhausted, this week has been awful"      (venting, not a defect)
-- "can you make the plan simpler?"                (a request, not a fault)
-- "the textbook has a mistake on page 40"         (wrong about the world, not about Rumi)
+request — they are asking for something Rumi CANNOT DO YET:
+- "I wish there was a /help command"
+- "could you add Sindhi to the languages?"
+- "it would help if I could download the plan as Word"
 
-Answer with one word: yes or no.
+neither — anything else:
+- "my students keep getting fractions wrong"   (a teaching problem, which is what Rumi is for)
+- "I am exhausted, this week has been awful"   (venting)
+- "can you make the plan simpler?"             (a normal use of a feature that works)
+- "the textbook has a mistake on page 40"      (wrong about the world, not about Rumi)
 
 Teacher's message:
 ${messageBody}`;
@@ -87,11 +97,18 @@ ${messageBody}`;
       temperature: 0,
     });
     const answer = (completion?.choices?.[0]?.message?.content || '').trim().toLowerCase();
-    return answer.startsWith('y');
+    if (answer.startsWith('defect')) return 'defect';
+    if (answer.startsWith('request')) return 'request';
+    return null;
   } catch (error) {
-    logToFile('Escalation: could not classify, treating as not-a-complaint', { error: error.message });
-    return false;
+    logToFile('Escalation: could not classify, treating as nothing to escalate', { error: error.message });
+    return null;
   }
+}
+
+/** Kept for callers that only care whether this is a defect. */
+async function confirm(messageBody, opts) {
+  return (await classify(messageBody, opts)) === 'defect';
 }
 
 /**
@@ -103,7 +120,7 @@ ${messageBody}`;
  * at different code. The `@agent` prefix is what makes this an addressed
  * event rather than something the agent merely sees.
  */
-async function send({ messageBody, teacherIdentifier, env = process.env, connection } = {}) {
+async function send({ messageBody, teacherIdentifier, kind = 'defect', env = process.env, connection } = {}) {
   const { roomId, agentName } = config(env);
   if (!roomId) return false;
 
@@ -125,16 +142,26 @@ async function send({ messageBody, teacherIdentifier, env = process.env, connect
     ? require('crypto').createHash('sha256').update(String(teacherIdentifier)).digest('hex').slice(0, 10)
     : 'unknown';
 
+  // The brief differs because the job does: a defect is reproduced, a request
+  // is designed. Saying which saves the agent guessing from the wording.
+  const headline = kind === 'request'
+    ? `@${agentName} a teacher is asking for something Rumi cannot do yet.`
+    : `@${agentName} a teacher is reporting that Rumi is broken.`;
+  const instruction = kind === 'request'
+    ? ['Please find where this would fit, keep the change small, and add a test',
+       'that fails without it. Open a pull request rather than pushing to the branch.']
+    : ['Please reproduce it from what they wrote before changing anything, and',
+       'write a test that fails on the bug first.'];
+
   const body = [
-    `@${agentName} a teacher is reporting that Rumi is broken.`,
+    headline,
     '',
     'Their words, verbatim:',
     `> ${String(messageBody).replace(/\n/g, '\n> ')}`,
     '',
     `Reporter trace: ${trace}`,
     '',
-    'Please reproduce it from what they wrote before changing anything, and',
-    'write a test that fails on the bug first.',
+    ...instruction,
   ].join('\n');
 
   try {
@@ -152,7 +179,18 @@ async function send({ messageBody, teacherIdentifier, env = process.env, connect
  * promise about when it will be fixed — the apology this replaces failed by
  * promising exactly that.
  */
-function acknowledgement(language = 'en') {
+function acknowledgement(language = 'en', kind = 'defect') {
+  if (kind === 'request') {
+    const asks = {
+      en: "That's a fair ask, and not something I can do today. "
+        + "I've passed it to the people who build me, in your words. "
+        + "I can't promise it will be built, but it is in front of someone who could.",
+      ur: 'یہ مناسب مطالبہ ہے، لیکن فی الحال میں یہ نہیں کر سکتا۔ '
+        + 'میں نے آپ کی بات ان لوگوں تک پہنچا دی ہے جو مجھے بناتے ہیں۔ '
+        + 'وعدہ نہیں کر سکتا کہ یہ بنے گا، لیکن اب یہ ان کے سامنے ہے۔',
+    };
+    return asks[language] || asks.en;
+  }
   const messages = {
     en: "Thank you for telling me — that's a fault on my side, not yours. "
       + "I've passed your exact words to the people who maintain me. "
@@ -167,6 +205,7 @@ function acknowledgement(language = 'en') {
 module.exports = {
   config,
   isConfigured,
+  classify,
   confirm,
   send,
   acknowledgement,
