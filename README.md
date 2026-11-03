@@ -46,7 +46,7 @@ you have a teaching assistant for your schools — no commissioning, no vendor, 
 <tr><td><b>Coaches right after the lesson</b></td><td>A teacher records their class and gets a framework-scored report plus a reflective conversation — while the lesson is still fresh, not at an annual workshop.</td></tr>
 <tr><td><b>Hears children read</b></td><td>A student reads aloud into a voice note; Rumi returns words-per-minute, accuracy, pronunciation and comprehension against grade benchmarks.</td></tr>
 <tr><td><b>Ships with real content</b></td><td>890 curriculum videos, 10,929 QA-certified questions, 15,557 voice clips and 3,217 illustrations — free, CDN-hosted, one command to import.</td></tr>
-<tr><td><b>Speaks their language</b></td><td>15 languages for chat, voice-note transcription and spoken replies — including a full Indian-language suite and Pakistan's regional languages.</td></tr>
+<tr><td><b>Speaks their language</b></td><td>16 languages for chat, voice-note transcription and spoken replies — including a full Indian-language suite and Pakistan's regional languages.</td></tr>
 <tr><td><b>Try it without Meta</b></td><td>Link your own WhatsApp with a QR code and start chatting in about fifteen minutes. No Business account, no app review, no waiting.</td></tr>
 <tr><td><b>Set up by talking to it</b></td><td>The repo is agent-native: open it in Claude Code, Cursor or Codex and say "set me up". Or run one guided wizard that asks in plain language and checks every answer for you.</td></tr>
 <tr><td><b>Your keys, your data</b></td><td>Your Supabase, your WhatsApp number, your model provider. Nothing routes through us. Apache-2.0.</td></tr>
@@ -280,7 +280,7 @@ Utility flows round it out — **settings** (language + coaching framework), **s
 
 ### 🌐 Languages
 
-**15 languages**, for **text chat, voice-note transcription (STT), and spoken replies (TTS)** alike.
+**16 languages**, for **text chat, voice-note transcription (STT), and spoken replies (TTS)** alike.
 Alongside English, Urdu, Arabic and Spanish, Rumi covers Pakistan's regional languages — Punjabi, Sindhi,
 Pashto and Balochi (via Meta's MMS-ASR) — Sri Lankan Tamil, and a complete **Indian-language suite**:
 
