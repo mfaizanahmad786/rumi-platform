@@ -157,6 +157,75 @@ channel-driver architecture.
 
 ---
 
+## Rumi on Switch: a staffroom, not a DM
+
+The channels above are each one app and one conversation: a teacher and a bot.
+[Switch](https://github.com/sandbox-quantum/switch) is different, and the difference is the point.
+
+Switch is a server you run yourself that turns a channel into a **room** — a place where people and
+several agents work together with shared context — and bridges those rooms into Slack, Microsoft Teams,
+Discord, Telegram and Mattermost. Rumi speaks one protocol to Switch and reaches all five. There are no
+per-platform credentials here: the Switch server owns the bridges.
+
+```bash
+rumi setup          # step 7 registers Rumi and opens its addressing policy
+```
+
+Three variables, all printed by the wizard:
+
+```
+SWITCH_BRIDGE_URL=http://127.0.0.1:8000
+SWITCH_AGENT_ID=…
+SWITCH_AGENT_API_KEY=…
+```
+
+### What a room gives you that a DM cannot
+
+**Teachers and engineers in the same place.** A teacher asks Rumi for a lesson plan in the staffroom.
+When Rumi gets something *wrong*, it does not apologise and move on — it posts the teacher's exact words
+into a linked engineering room, addressed to the coding agent working there, and tells the teacher plainly
+that it has been passed on. Set `SWITCH_ESCALATION_ROOM_ID` to turn that on.
+
+That matters because Rumi is a product, not its own engineer. Before this, a bug report died in the chat:
+the model apologised, promised improvements it had no ability to make, and nobody who could fix anything
+ever heard about it.
+
+**Your coding agent, in the channel.** Claude Code, Codex, Cursor CLI, OpenCode or Antigravity can join
+the same workspace as an agent — run by [Switch Console](https://github.com/sandbox-quantum/switch),
+pointed at this repository. A teacher reports a bug, Rumi escalates it, the coding agent reproduces it,
+writes a failing test and reports back, and a human reviews — all in front of the team rather than in
+somebody's private terminal.
+
+### Addressing
+
+In a room with several agents, a message is for Rumi only when it says so:
+
+```
+@rumi give me a lesson plan on fractions for grade 4
+```
+
+Without the `@`, Rumi reads the message and stays quiet. That is what lets a room hold more than one agent
+and stay workable.
+
+> **One thing worth knowing before you connect Slack:** if your Slack app's bot user has the same name as
+> your Switch agent, Slack wins. `@rumi` becomes a mention of the *app*, the literal text disappears, and
+> the agent is never addressed — with nothing in any log to say why. Either name the Slack app something
+> else, or give the agent a room alias: `/set-alias @rumi @teach`.
+
+### What carries over
+
+Everything, with no code change. The driver never knows which platform it is talking to — it speaks the
+agent protocol to Switch, and Switch owns the per-platform bridges. Chat, coaching, reading assessment,
+quizzes, attendance, lesson-plan PDFs and the numbered-menu fallbacks all work the same on Slack as on
+Mattermost.
+
+Interactive components degrade to numbered text here rather than rendering natively, the way they do on
+Baileys. Slack can show real buttons because Slack is one platform; a Switch room may be mirrored into any
+of five, so text is the honest common denominator and `pending-options.js` resolves `2` back to the option
+the teacher meant.
+
+---
+
 ## Why Rumi Exists
 
 Across the world, **millions of teachers work in isolation** — in rural schools, multigrade classrooms, and
@@ -303,7 +372,7 @@ rumi-platform/
 │   ├── shared/
 │   │   ├── config/         # Presence-based feature gating, branding, languages, regions
 │   │   ├── services/
-│   │   │   ├── messaging/  # Pluggable channel drivers (meta | baileys) + additive Slack/Discord + text-flow rendering
+│   │   │   ├── messaging/  # Pluggable channel drivers (meta | baileys) + additive Slack/Discord/Switch + text-flow rendering
 │   │   │   ├── queue/      # Pluggable queue (sqs | bullmq)
 │   │   │   └── …           # LLM, coaching, reading, lesson plans, quiz, video, …
 │   │   ├── handlers/       # text / voice / image / flow / exam / attendance
@@ -373,8 +442,8 @@ Guide](docs/agent-customization.md) maps each goal to exact files:
 |---|---|---|
 | Runtime | Node.js 20+ | Server-side JavaScript |
 | Web | Express.js | Webhook + API routes |
-| Messaging | WhatsApp Cloud API **or** linked-device socket (pluggable via `CHANNEL_DRIVER`), plus Slack and Discord as additive channels | Messages, media, interactive Flows |
-| AI / LLM | OpenRouter (500+ models) | Chat, analysis, content |
+| Messaging | WhatsApp Cloud API **or** linked-device socket (pluggable via `CHANNEL_DRIVER`), plus Slack, Discord and Switch as additive channels | Messages, media, interactive Flows |
+| AI / LLM | OpenRouter, Google Gemini, or any OpenAI-compatible endpoint (`LLM_BASE_URL`) | Chat, analysis, content |
 | Database | Supabase (PostgreSQL) | 76 tables with Row-Level Security |
 | Queue | Redis or AWS SQS (pluggable via `QUEUE_DRIVER`) | Transcription, reports, video, exams |
 | Speech-to-Text | Soniox, Whisper, Modal MMS-ASR | Multilingual transcription |
@@ -413,7 +482,7 @@ the schema, the docs, the agent skills, and the link web all stay honest.
 | [docs/onboarding/sandbox-production-design.md](docs/onboarding/sandbox-production-design.md) | How the channel drivers work, and how `rumi graduate` moves between them |
 | [docs/onboarding/whatsapp.md](docs/onboarding/whatsapp.md) | Getting a WhatsApp Business number, start to finish |
 | [docs/onboarding/api-keys.md](docs/onboarding/api-keys.md) | Every API key: what it unlocks and where to get it |
-| [docs/LP_PATHS.md](docs/LP_PATHS.md) | How a lesson-plan request is routed (pre-generated vs Gamma vs photo) |
+| [docs/LP_PATHS.md](docs/LP_PATHS.md) | How a lesson-plan request is routed (pre-generated vs Gamma vs local render vs photo) |
 | [docs/architecture.md](docs/architecture.md) | System architecture & message flow |
 | [CLAUDE.md](CLAUDE.md) + [.claude/](.claude/) | **Agent-native** context: the routers + the 16 operational skills |
 | [docs/agent-customization.md](docs/agent-customization.md) | Agent-first deep customization (frameworks, languages, branding) |
