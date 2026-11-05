@@ -95,6 +95,7 @@ async function tryCurriculumLessonPlanServe(from, topic, user, language) {
 const { evaluateHomeworkTrigger } = require('./homework-trigger');
 const { detectEditClassIntent } = require('./edit-class-trigger');
 const { evaluateEscalationTrigger } = require('./escalation-trigger');
+const { evaluateHelpTrigger, buildHelpMessage } = require('./help-trigger');
 const EscalationService = require('../services/escalation.service');
 
 async function handleTextMessage(message, from, messageBody, user = null) {
@@ -385,6 +386,20 @@ async function handleTextMessage(message, from, messageBody, user = null) {
       logToFile('⚠️ Error in exam checker detection', { error: error.message });
       // Continue with regular message handling
     }
+  }
+
+  // ============================================================
+  // HELP COMMAND DETECTION: Check for /help command
+  // ============================================================
+  // Placed before every other command so no in-progress state (quiz,
+  // attendance, a pending text-flow question) can swallow it: a teacher who
+  // types /help is lost, and that is the worst possible moment to answer with
+  // something else. Deliberately works WITHOUT a registered user — discovering
+  // what the bot does is exactly what a brand-new number needs.
+  if (evaluateHelpTrigger({ messageBody }).match) {
+    logToFile('❓ /help command detected', { userId: user?.id, phoneNumber: from });
+    await WhatsAppService.sendMessage(from, buildHelpMessage(responseLanguage));
+    return;
   }
 
   // ============================================================

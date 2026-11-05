@@ -867,16 +867,17 @@ async function walkSlackAppConfig(io, baseUrl) {
   console.log(ui.bold('  5. Slash Commands'));
   console.log(ui.say('Add each of these as its own Slash Command, every one pointing at the same Request URL:'));
   console.log(ui.box([urls.commands], { title: 'Request URL (same one, every time)', role: 'accent' }));
-  // /status is confirmed to be a Slack-reserved word — Slack rejects it
-  // outright ("is a reserved word") the moment you try to add it, no matter
-  // the Request URL. Skip it here rather than sending the user into a wall;
-  // the feature itself still works on Slack via the natural-language
-  // alternative text-message.handler.js added for exactly this reason
+  // Slack rejects its own reserved words outright ("is a reserved word") the
+  // moment you try to add them, no matter the Request URL. Skip them here
+  // rather than sending the user into a wall; both still work on every other
+  // channel, and /status has a natural-language alternative on Slack
   // ("my status" / "show status" / "what's running").
-  const slackAddableCommands = fields.SLACK_SLASH_COMMANDS.filter((cmd) => cmd !== '/status');
+  const slackAddableCommands = fields.SLACK_SLASH_COMMANDS
+    .filter((cmd) => !fields.SLACK_RESERVED_COMMANDS.includes(cmd));
   console.log(ui.table(slackAddableCommands.map((cmd) => [cmd, ''])));
   console.log(ui.aside('/readingtest is one word — Slack command names cannot contain a space.'));
   console.log(ui.aside('/status is skipped — Slack reserves that name and refuses to register it. Teachers reach the same feature on Slack by typing "my status" instead.'));
+  console.log(ui.aside('/help is skipped for the same reason — Slack reserves it. Teachers on Slack reach the feature list with /menu instead.'));
   await io.pressEnter(`Press Enter once all ${slackAddableCommands.length} commands are added`);
 
   console.log('');

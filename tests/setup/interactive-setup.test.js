@@ -547,7 +547,7 @@ describe('stepMessagingChannels', () => {
     // of silently omitting it, which is why the second assertion checks for
     // an explicit note, not just the command's absence.
     const { stepMessagingChannels } = loadWizard({ probes: slackPass });
-    const { SLACK_BOT_SCOPES, SLACK_SLASH_COMMANDS } = require('../../bot/scripts/setup/fields');
+    const { SLACK_BOT_SCOPES, SLACK_SLASH_COMMANDS, SLACK_RESERVED_COMMANDS } = require('../../bot/scripts/setup/fields');
     const io = fakeIo({
       confirm: [true],
       ask: ['https://my-tunnel.ngrok-free.dev', 'signing-secret', 'xoxb-bot-token'],
@@ -556,7 +556,7 @@ describe('stepMessagingChannels', () => {
     await stepMessagingChannels(io, {}, () => {});
 
     for (const scope of SLACK_BOT_SCOPES) expect(log.text).toContain(scope);
-    for (const cmd of SLACK_SLASH_COMMANDS.filter((c) => c !== '/status')) expect(log.text).toContain(cmd);
+    for (const cmd of SLACK_SLASH_COMMANDS.filter((c) => !SLACK_RESERVED_COMMANDS.includes(c))) expect(log.text).toContain(cmd);
     // /status itself is still mentioned, but only inside the explanatory
     // note below — never as a numbered row the user is told to go add.
     expect(log.text).toMatch(/status.*reserve|reserve.*status/is);

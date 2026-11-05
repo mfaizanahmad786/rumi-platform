@@ -23,6 +23,7 @@ const { SLACK_SLASH_COMMANDS } = require('./fields');
 // command autocomplete UI (Discord requires a non-empty description, unlike
 // Slack which has no such requirement for its own commands).
 const COMMAND_DESCRIPTIONS = {
+  help: 'See everything Rumi can help you with',
   portal: 'Open your Rumi teacher portal',
   readingtest: 'Start a reading assessment for a student',
   quiz: 'Create a quiz for your class',

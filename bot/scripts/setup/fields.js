@@ -153,8 +153,17 @@ const SLACK_BOT_SCOPES = ['chat:write', 'im:write', 'reactions:write', 'files:re
  * rather than being typed as plain text (which Slack intercepts and rejects
  * before it ever reaches the bot). */
 const SLACK_SLASH_COMMANDS = [
-  '/portal', '/readingtest', '/quiz', '/video', '/menu', '/register', '/language', '/settings', '/status',
+  '/help', '/portal', '/readingtest', '/quiz', '/video', '/menu', '/register', '/language', '/settings', '/status',
 ];
+
+/** Names Slack keeps for itself. Slack rejects these outright ("is a reserved
+ * word") the moment you try to add them, whatever Request URL you give — so
+ * the wizard must skip them rather than sending the user into a wall. They
+ * still work on every other channel, which is why they stay in the list
+ * above: that list is "what the handler recognizes", not "what Slack allows".
+ * /status additionally has a natural-language alternative in
+ * text-message.handler.js ("my status" / "what's running") for this reason. */
+const SLACK_RESERVED_COMMANDS = ['/help', '/status'];
 
 /**
  * Builds the exact 3 Request URLs from one base, so the wizard can print
@@ -185,6 +194,7 @@ module.exports = {
   OPTIONAL_EXTRAS,
   SLACK_BOT_SCOPES,
   SLACK_SLASH_COMMANDS,
+  SLACK_RESERVED_COMMANDS,
   SLACK_APP_WALKTHROUGH_INTRO,
   slackRequestUrls,
 };
