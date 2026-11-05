@@ -74,14 +74,45 @@ const COMPLAINT_SIGNALS = [
  * reach the people who build Rumi and both previously died in the chat, but
  * an engineer picking one up needs to know which they are holding.
  */
+/**
+ * Intensifiers allowed to sit inside a polite request without breaking it.
+ *
+ * This fragment exists because the first version of these patterns was built
+ * from fixed phrases — `it would help if`, `would be great` — and a single
+ * adverb defeated them. Observed live, in the exact sentence this feature was
+ * built to catch:
+ *
+ *   "it would really help If i typed /help and see what you can do."
+ *
+ * `it would help if` did not match `it would really help if`, so the gate
+ * returned `no_signal`, the classifier never ran, and the LLM answered with a
+ * cheerful list of things Rumi can already do. The teacher's ask died in the
+ * chat — the precise failure this whole path was written to end.
+ *
+ * Nobody writes the textbook phrasing. People write "really", "so", "much".
+ */
+const ADV = String.raw`(?:\s+(?:really|very|so|much|just|also|still|even|genuinely|truly|honestly|massively|definitely|certainly|probably|maybe|perhaps))*`;
+
 const REQUEST_SIGNALS = [
-  /\b(i wish|wish (you|it)|would be (great|good|nice|helpful)|it would help if)\b/i,
+  /\b(i wish|wish (you|it|rumi))\b/i,
+  // "it would (really) help if/to …". The if/to tail is what makes it a
+  // hypothetical rather than "would you help me with a lesson plan", which is
+  // an ordinary use of a feature that works.
+  new RegExp(String.raw`\b(?:would|'d)${ADV}\s+help\s+(?:if|to|when)\b`, 'i'),
+  // Comparatives belong here as much as the plain forms: a teacher writes
+  // "would be so much nicer if", not "would be nice if".
+  new RegExp(String.raw`\bwould be${ADV}\s+(?:great|good|nice|nicer|helpful|useful|handy|better|easier|simpler|quicker|faster|amazing)\b`, 'i'),
   // "add/support/include" only. NOT "make" or "build": "can you make me a
   // lesson plan" is the single most common thing a teacher says to Rumi, and
   // promoting it would mean a classifier call on nearly every request.
   /\b(can|could|would) you (please )?(add|support|include)\b/i,
   /\b(is there|do you have) (a |any )?way to\b/i,
-  /\b(please )?add (a|an|the)?\s*\w+\s*(command|option|button|feature)\b/i,
+  // `[/\w-]` rather than `\w`, because the thing being asked for is routinely
+  // named as the command itself: "please add a /help command".
+  /\b(please )?add (a|an|the)?\s*[/\w-]+\s*(command|option|button|feature)\b/i,
+  // A gap stated as a flat absence rather than a wish.
+  /\b(no|isn'?t (a|any)|there'?s no) (option|way|button|command|setting) to\b/i,
+  /\b(you|it|rumi) (can'?t|cannot|don'?t|does not|doesn'?t) (do|handle|support|understand)\b/i,
   /\bfeature request\b/i,
   // Urdu
   /شامل کر/,

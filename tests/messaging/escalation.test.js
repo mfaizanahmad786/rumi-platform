@@ -65,6 +65,39 @@ describe('escalation trigger — the cheap gate', () => {
     expect(d.suspected).toBe(suspected);
   });
 
+  // The gate was built from textbook phrasings — `it would help if`,
+  // `would be great` — and nobody writes that way. One adverb defeated it, in
+  // the exact sentence the feature exists to catch:
+  //
+  //   "it would really help If i typed /help and see what you can do."
+  //
+  // The gate returned no_signal, the classifier never ran, and the LLM replied
+  // with a cheerful list of things Rumi can already do. The ask died in the
+  // chat — the precise failure this path was written to end.
+  it.each([
+    ['the sentence that was missed live', 'it would really help If i typed /help and see what you can do.'],
+    ['an adverb inside the phrase', "it'd really help to have a way to see every command"],
+    ['stacked adverbs', 'it would just really help if you remembered my grade'],
+    ['a comparative, not the plain form', 'would be so much nicer if it remembered my grade level'],
+    ['the command named with its slash', 'please add a /help command'],
+    ['a gap stated flatly, not as a wish', 'there is no way to see what you can do'],
+  ])('promotes a request despite ordinary English: %s', (_label, text) => {
+    const d = on(text);
+    expect(d.match).toBe(true);
+    expect(d.suspected).toBe('request');
+  });
+
+  it('still leaves ordinary requests alone after loosening the phrasing', () => {
+    // Loosening the gate is only safe while these stay out: each would put a
+    // classifier call on a large share of everything a teacher writes.
+    for (const text of [
+      'I would like a lesson plan about fractions',
+      'would you help me plan tomorrow morning',
+      'can you make me a lesson plan on photosynthesis for grade 5',
+      'thanks, that was really helpful',
+    ]) expect(on(text).match).toBe(false);
+  });
+
   it('does NOT promote the most common thing a teacher says', () => {
     // "can you make me X" is ordinary use of a feature that works. Matching it
     // would put a classifier call on nearly every lesson-plan request.
